@@ -55,7 +55,20 @@
     <input type="text" id="title" placeholder="Enter title" />
     <textarea id="text" rows="6" placeholder="Enter text"></textarea>
     <div id="charCount">Characters: 0 | Estimated cost: $0.000</div>
-    <input type="text" id="voice" placeholder="Optional voice parameter" />
+
+    <!-- Updated voice input with datalist -->
+    <input list="voices" type="text" id="voice" placeholder="Optional voice parameter" />
+    <datalist id="voices">
+      <option value="echo">
+      <option value="ash">
+      <option value="alloy">
+      <option value="fable">
+      <option value="onyx">
+      <option value="nova">
+      <option value="shimmer">
+      <!-- Add more voice options as needed -->
+    </datalist>
+    
     <button id="generateBtn">Generate Audio</button>
     <div class="audio-list" id="audioList"></div>
   </div>
