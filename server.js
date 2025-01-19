@@ -4,7 +4,7 @@ import dotenv from 'dotenv';
 import fs from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
-import { execSync } from 'child_process';
+import { spawn } from 'child_process';
 import { Configuration, OpenAIApi } from 'openai';
 
 dotenv.config();
@@ -25,18 +25,127 @@ app.use(
 );
 app.use(express.json());
 
+app.get('/generate-audio-stream', async (req, res) => {
+  const { title, text, voice } = req.query;
+  if (!title || !text) {
+    res.writeHead(400, { 'Content-Type': 'text/event-stream' });
+    res.write('data: {"error": "Title and text are required."}\n\n');
+    return res.end();
+  }
+
+  res.set({
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive'
+  });
+  res.flushHeaders();
+
+  try {
+    // 1. Splitting text into chunks
+    res.write(`data: {"status":"Splitting text into chunks..."}\n\n`);
+    const chunkSize = 4000;
+    let chunks = [];
+    let start = 0;
+    while (start < text.length) {
+      let end = start + chunkSize;
+      if (end < text.length) {
+        const punctuationIndex = text.lastIndexOf('.', end);
+        if (punctuationIndex > start) {
+          end = punctuationIndex + 1;
+        }
+      }
+      chunks.push(text.slice(start, end));
+      start = end;
+    }
+
+    // 2. Generating audio for each chunk
+    let tempFiles = [];
+    for (let i = 0; i < chunks.length; i++) {
+      res.write(`data: {"status":"Generating audio for chunk ${i + 1} of ${chunks.length}"}\n\n`);
+      const chunk = chunks[i];
+      const response = await fetch("https://api.openai.com/v1/audio/speech", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: 'tts-1',
+          voice: voice || 'alloy',
+          input: chunk
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`OpenAI API error: ${response.status} ${response.statusText}`);
+      }
+
+      const arrayBuffer = await response.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+      const tempPath = path.join(tmpdir(), `chunk_${i}.mp3`);
+      fs.writeFileSync(tempPath, buffer);
+      tempFiles.push(tempPath);
+    }
+
+    // 3. Concatenating audio files without re-encoding
+    res.write(`data: {"status":"Concatenating audio files..."}\n\n`);
+    const fileListPath = path.join(tmpdir(), 'filelist.txt');
+    const listContent = tempFiles.map(file => `file '${file}'`).join('\n');
+    fs.writeFileSync(fileListPath, listContent);
+
+    const concatenatedPath = path.join(tmpdir(), `concatenated_${Date.now()}.mp3`);
+
+    await new Promise((resolve, reject) => {
+      const ffmpegProcess = spawn('ffmpeg', [
+        '-f', 'concat',
+        '-safe', '0',
+        '-i', fileListPath,
+        '-c', 'copy',
+        concatenatedPath
+      ]);
+
+      ffmpegProcess.stderr.on('data', data => {
+        console.error(`ffmpeg stderr: ${data}`);
+      });
+
+      ffmpegProcess.on('close', code => {
+        if (code === 0) {
+          resolve();
+        } else {
+          reject(new Error(`ffmpeg process exited with code ${code}`));
+        }
+      });
+    });
+
+    const finalBuffer = fs.readFileSync(concatenatedPath);
+    const base64Audio = finalBuffer.toString('base64');
+
+    // 4. Cleaning up temporary files
+    tempFiles.forEach(f => fs.unlinkSync(f));
+    fs.unlinkSync(fileListPath);
+    fs.unlinkSync(concatenatedPath);
+
+    res.write(`data: {"status":"Audio generated successfully."}\n\n`);
+    res.write(`data: {"title": "${title}", "audioBase64": "${base64Audio}"}\n\n`);
+    res.end();
+  } catch (error) {
+    console.error('Error generating audio:', error);
+    res.write(`data: {"error": "Failed to generate audio."}\n\n`);
+    res.end();
+  }
+});
+
 app.post('/generate-audio', async (req, res) => {
+  // This endpoint remains unchanged from previous quality-preserving logic
   try {
     const { title, text, voice } = req.body;
     if (!title || !text) {
       return res.status(400).json({ error: 'Title and text are required.' });
     }
 
-    // Split text into 4000-character chunks
     const chunkSize = 4000;
     let chunks = [];
     let start = 0;
-
     while (start < text.length) {
       let end = start + chunkSize;
       if (end < text.length) {
@@ -76,7 +185,6 @@ app.post('/generate-audio', async (req, res) => {
       tempFiles.push(tempPath);
     }
 
-    // Concatenate audio files without re-encoding using FFmpeg's concat demuxer
     const fileListPath = path.join(tmpdir(), 'filelist.txt');
     const listContent = tempFiles.map(file => `file '${file}'`).join('\n');
     fs.writeFileSync(fileListPath, listContent);
@@ -87,7 +195,6 @@ app.post('/generate-audio', async (req, res) => {
     const finalBuffer = fs.readFileSync(concatenatedPath);
     const base64Audio = finalBuffer.toString('base64');
 
-    // Clean up temporary files
     tempFiles.forEach(f => fs.unlinkSync(f));
     fs.unlinkSync(fileListPath);
     fs.unlinkSync(concatenatedPath);
