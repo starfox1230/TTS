@@ -38,28 +38,39 @@ app.post('/generate-audio', async (req, res) => {
     const chunkSize = 4000;
     let chunks = [];
     for (let i = 0; i < text.length; i += chunkSize) {
-      // Attempt to break at sentence end if possible
       let end = i + chunkSize;
       if (end < text.length) {
-        // Look for punctuation near the cutoff
         const punctuationIndex = text.lastIndexOf('.', end);
         if (punctuationIndex > i) {
           end = punctuationIndex + 1;
         }
       }
       chunks.push(text.slice(i, end));
-      i = end - 1; // Adjust index after slice
+      i = end - 1;
     }
 
     let tempFiles = [];
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
-      const mp3Response = await openai.audio.speech.create({
-        model: 'tts-1',
-        voice: voice || 'alloy',
-        input: chunk,
+      const response = await fetch("https://api.openai.com/v1/audio/speech", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: 'tts-1',
+          voice: voice || 'alloy',
+          input: chunk
+        })
       });
-      const buffer = Buffer.from(await mp3Response.arrayBuffer());
+
+      if (!response.ok) {
+        throw new Error(`OpenAI API error: ${response.status} ${response.statusText}`);
+      }
+
+      const arrayBuffer = await response.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
       const tempPath = path.join(tmpdir(), `chunk_${i}.mp3`);
       fs.writeFileSync(tempPath, buffer);
       tempFiles.push(tempPath);
