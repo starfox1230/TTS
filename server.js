@@ -25,13 +25,40 @@ app.use(
 );
 app.use(express.json());
 
-app.get('/generate-audio-stream', async (req, res) => {
-  const { title, text, voice } = req.query;
+// In-memory store for requests
+const requests = new Map();
+
+// New endpoint to initiate audio generation and store large text
+app.post('/initiate-audio-generation', async (req, res) => {
+  const { title, text, voice } = req.body;
   if (!title || !text) {
+    return res.status(400).json({ error: 'Title and text are required.' });
+  }
+  // Generate a unique requestId
+  const requestId = Date.now().toString() + Math.random().toString(36).substring(2);
+  requests.set(requestId, { title, text, voice });
+  res.json({ requestId });
+});
+
+// Updated SSE endpoint using requestId
+app.get('/generate-audio-stream', async (req, res) => {
+  const { requestId } = req.query;
+  if (!requestId) {
     res.writeHead(400, { 'Content-Type': 'text/event-stream' });
-    res.write('data: {"error": "Title and text are required."}\n\n');
+    res.write('data: {"error": "requestId parameter is required."}\n\n');
     return res.end();
   }
+
+  const storedData = requests.get(requestId);
+  if (!storedData) {
+    res.writeHead(404, { 'Content-Type': 'text/event-stream' });
+    res.write('data: {"error": "No data found for the given requestId."}\n\n');
+    return res.end();
+  }
+  // Optionally remove the request from store after retrieval
+  requests.delete(requestId);
+
+  const { title, text, voice } = storedData;
 
   res.set({
     'Content-Type': 'text/event-stream',
@@ -135,8 +162,8 @@ app.get('/generate-audio-stream', async (req, res) => {
   }
 });
 
+// Existing non-streaming endpoint remains unchanged
 app.post('/generate-audio', async (req, res) => {
-  // This endpoint remains unchanged from previous quality-preserving logic
   try {
     const { title, text, voice } = req.body;
     if (!title || !text) {
@@ -190,7 +217,8 @@ app.post('/generate-audio', async (req, res) => {
     fs.writeFileSync(fileListPath, listContent);
 
     const concatenatedPath = path.join(tmpdir(), `concatenated_${Date.now()}.mp3`);
-    execSync(`ffmpeg -f concat -safe 0 -i ${fileListPath} -c copy ${concatenatedPath}`);
+    // For non-streaming endpoint, using execSync is still acceptable
+    require('child_process').execSync(`ffmpeg -f concat -safe 0 -i ${fileListPath} -c copy ${concatenatedPath}`);
 
     const finalBuffer = fs.readFileSync(concatenatedPath);
     const base64Audio = finalBuffer.toString('base64');
