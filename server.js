@@ -3,13 +3,18 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import OpenAI from 'openai';
 import fs from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
 import ffmpeg from 'fluent-ffmpeg';
+import { Configuration, OpenAIApi } from 'openai';
 
 dotenv.config();
+
+const configuration = new Configuration({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+const openai = new OpenAIApi(configuration);
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -21,10 +26,6 @@ app.use(
   })
 );
 app.use(express.json());
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
 
 app.post('/generate-audio', async (req, res) => {
   try {
