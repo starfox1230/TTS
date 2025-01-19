@@ -51,21 +51,23 @@
 <body>
   <div class="container">
     <div id="warmUpMessage">Warming up the server, please wait...</div>
-    <h1>Night Mode TTS Generator</h1>
+    <h1>TTS Generator</h1>
     <input type="text" id="title" placeholder="Enter title" />
     <textarea id="text" rows="6" placeholder="Enter text"></textarea>
     <div id="charCount">Characters: 0 | Estimated cost: $0.000</div>
 
     <!-- Updated voice input with datalist -->
-    <input list="voices" type="text" id="voice" placeholder="Optional voice parameter" />
-    <datalist id="voices">
-      <option value="echo">
-      <option value="ash">
-      <option value="alloy">
-      <option value="fable">
-      <option value="onyx">
-      <option value="nova">
-      <option value="shimmer">
+    <select id="voice">
+      <option value="">Select a voice (optional)</option>
+      <option value="echo">Echo</option>
+      <option value="ash">Ash</option>
+      <option value="alloy">Alloy</option>
+      <option value="fable">Fable</option>
+      <option value="onyx">Onyx</option>
+      <option value="nova">Nova</option>
+      <option value="shimmer">Shimmer</option>
+  <!-- Add more voice options as needed -->
+</select>
       <!-- Add more voice options as needed -->
     </datalist>
     
