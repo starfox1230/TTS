@@ -46,27 +46,30 @@
       font-size: 0.9em;
       color: #bbb;
     }
-    /* Dropdown menu styling for night mode */
     select {
       width: 100%;
       padding: 10px;
       margin-top: 10px;
       border: none;
       border-radius: 4px;
-      background: #1e1e1e; /* Dark background */
-      color: #e0e0e0; /* Light text */
-      appearance: none; /* Remove default browser styles */
+      background: #1e1e1e;
+      color: #e0e0e0;
+      appearance: none;
       cursor: pointer;
     }
     select:focus {
       outline: none;
-      border: 1px solid #1e88e5; /* Highlight border on focus */
+      border: 1px solid #1e88e5;
     }
     option {
-      background: #1e1e1e; /* Match dropdown menu background */
-      color: #e0e0e0; /* Light text for options */
+      background: #1e1e1e;
+      color: #e0e0e0;
     }
-
+    #statusMessages {
+      margin-top: 10px;
+      font-size: 1em;
+      color: #90caf9;
+    }
   </style>
 </head>
 <body>
@@ -77,7 +80,6 @@
     <textarea id="text" rows="6" placeholder="Enter text"></textarea>
     <div id="charCount">Characters: 0 | Estimated cost: $0.000</div>
 
-    <!-- Updated voice input with datalist -->
     <select id="voice">
       <option value="">Select a voice (optional)</option>
       <option value="echo">Echo</option>
@@ -87,78 +89,91 @@
       <option value="onyx">Onyx</option>
       <option value="nova">Nova</option>
       <option value="shimmer">Shimmer</option>
-  <!-- Add more voice options as needed -->
-</select>
       <!-- Add more voice options as needed -->
-    </datalist>
-    
+    </select>
+
     <button id="generateBtn">Generate Audio</button>
+    <div id="statusMessages"></div>
     <div class="audio-list" id="audioList"></div>
   </div>
   
-  
-  
-  
-<script>
-  const API_BASE = 'https://tts-jeh9.onrender.com';
+  <script>
+    // Replace with your actual backend URL deployed on Render
+    const API_BASE = 'https://tts-jeh9.onrender.com';
 
-  document.getElementById('generateBtn').addEventListener('click', () => {
-    const title = document.getElementById('title').value;
-    const text = document.getElementById('text').value;
-    const voice = document.getElementById('voice').value;
-
-    const statusDiv = document.createElement('div');
-    statusDiv.id = 'statusMessages';
-    document.body.insertBefore(statusDiv, document.getElementById('audioList'));
-
-    const eventSource = new EventSource(`${API_BASE}/generate-audio-stream?` +
-      `title=${encodeURIComponent(title)}&` +
-      `text=${encodeURIComponent(text)}&` +
-      `voice=${encodeURIComponent(voice)}`);
-
-    eventSource.onmessage = function(e) {
-      const data = JSON.parse(e.data);
-
-      if (data.status) {
-        statusDiv.innerText = data.status;
-      } else if (data.error) {
-        statusDiv.innerText = data.error;
-        eventSource.close();
-      } else if (data.audioBase64 && data.title) {
-        // Process final audio result
-        const binary = atob(data.audioBase64);
-        const array = [];
-        for (let i = 0; i < binary.length; i++) {
-          array.push(binary.charCodeAt(i));
-        }
-        const blob = new Blob([new Uint8Array(array)], { type: 'audio/mpeg' });
-        const blobUrl = URL.createObjectURL(blob);
-
-        const audioList = document.getElementById('audioList');
-        const item = document.createElement('div');
-        item.className = 'audio-item';
-        item.innerHTML = `
-          <h3>${data.title}</h3>
-          <audio controls src="${blobUrl}"></audio><br/>
-          <a href="${blobUrl}" download="${data.title}.mp3">Download ${data.title}.mp3</a>
-        `;
-        audioList.prepend(item);
-
-        statusDiv.innerText = 'Process complete.';
-        eventSource.close();
+    // Warm-up call on page load
+    window.addEventListener('load', async () => {
+      const warmUpMessage = document.getElementById('warmUpMessage');
+      try {
+        await fetch(API_BASE + '/');
+        warmUpMessage.innerText = 'Server is ready!';
+        setTimeout(() => warmUpMessage.style.display = 'none', 2000);
+      } catch(e) {
+        warmUpMessage.innerText = 'Error contacting server.';
       }
-    };
+    });
 
-    eventSource.onerror = function(e) {
-      console.error("EventSource failed: ", e);
-      statusDiv.innerText = "An error occurred while receiving updates.";
-      eventSource.close();
-    };
-  });
-</script>
-  
-  
-  
-  
+    // Character count and estimated cost calculation
+    document.getElementById('text').addEventListener('input', function() {
+      const textLen = this.value.length;
+      const cost = (textLen / 1000) * 0.015;
+      document.getElementById('charCount').innerText = `Characters: ${textLen} | Estimated cost: $${cost.toFixed(3)}`;
+    });
+
+    document.getElementById('generateBtn').addEventListener('click', () => {
+      const title = document.getElementById('title').value;
+      const text = document.getElementById('text').value;
+      const voice = document.getElementById('voice').value;
+
+      // Clear previous status messages
+      const statusDiv = document.getElementById('statusMessages');
+      statusDiv.innerText = '';
+
+      // Start SSE connection for status updates
+      const eventSource = new EventSource(`${API_BASE}/generate-audio-stream?` +
+        `title=${encodeURIComponent(title)}&` +
+        `text=${encodeURIComponent(text)}&` +
+        `voice=${encodeURIComponent(voice)}`);
+
+      eventSource.onmessage = function(e) {
+        const data = JSON.parse(e.data);
+
+        if (data.status) {
+          statusDiv.innerText = data.status;
+        } else if (data.error) {
+          statusDiv.innerText = data.error;
+          eventSource.close();
+        } else if (data.audioBase64 && data.title) {
+          // Process final audio result
+          const binary = atob(data.audioBase64);
+          const array = [];
+          for (let i = 0; i < binary.length; i++) {
+            array.push(binary.charCodeAt(i));
+          }
+          const blob = new Blob([new Uint8Array(array)], { type: 'audio/mpeg' });
+          const blobUrl = URL.createObjectURL(blob);
+
+          const audioList = document.getElementById('audioList');
+          const item = document.createElement('div');
+          item.className = 'audio-item';
+          item.innerHTML = `
+            <h3>${data.title}</h3>
+            <audio controls src="${blobUrl}"></audio><br/>
+            <a href="${blobUrl}" download="${data.title}.mp3">Download ${data.title}.mp3</a>
+          `;
+          audioList.prepend(item);
+
+          statusDiv.innerText = 'Process complete.';
+          eventSource.close();
+        }
+      };
+
+      eventSource.onerror = function(e) {
+        console.error("EventSource failed: ", e);
+        statusDiv.innerText = "An error occurred while receiving updates.";
+        eventSource.close();
+      };
+    });
+  </script>
 </body>
 </html>
