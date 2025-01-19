@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Night Mode TTS App</title>
+  <style>
+    body {
+      background-color: #121212;
+      color: #e0e0e0;
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 20px;
+    }
+    .container { max-width: 800px; margin: auto; }
+    input, textarea, button {
+      width: 100%;
+      padding: 10px;
+      margin-top: 10px;
+      border: none;
+      border-radius: 4px;
+    }
+    input, textarea {
+      background: #1e1e1e;
+      color: #e0e0e0;
+    }
+    button {
+      background: #1e88e5;
+      color: #fff;
+      cursor: pointer;
+    }
+    button:hover { background: #1565c0; }
+    .audio-list { margin-top: 20px; }
+    .audio-item { margin-bottom: 20px; }
+    a { color: #90caf9; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    #warmUpMessage {
+      background: #333;
+      padding: 10px;
+      border-radius: 4px;
+      margin-bottom: 20px;
+      text-align: center;
+    }
+    #charCount {
+      margin-top: 5px;
+      font-size: 0.9em;
+      color: #bbb;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div id="warmUpMessage">Warming up the server, please wait...</div>
+    <h1>Night Mode TTS Generator</h1>
+    <input type="text" id="title" placeholder="Enter title" />
+    <textarea id="text" rows="6" placeholder="Enter text"></textarea>
+    <div id="charCount">Characters: 0 | Estimated cost: $0.000</div>
+    <input type="text" id="voice" placeholder="Optional voice parameter" />
+    <button id="generateBtn">Generate Audio</button>
+    <div class="audio-list" id="audioList"></div>
+  </div>
+  
+  <script>
+    // Replace with your actual backend URL deployed on Render
+    const API_BASE = 'https://YOUR_RENDER_SERVICE_URL';
+
+    // Warm-up call on page load
+    window.addEventListener('load', async () => {
+      const warmUpMessage = document.getElementById('warmUpMessage');
+      try {
+        await fetch(API_BASE + '/');
+        warmUpMessage.innerText = 'Server is ready!';
+        // Optionally remove the message after a delay
+        setTimeout(() => warmUpMessage.style.display = 'none', 2000);
+      } catch(e) {
+        warmUpMessage.innerText = 'Error contacting server.';
+      }
+    });
+
+    // Character count and estimated cost calculation
+    document.getElementById('text').addEventListener('input', function() {
+      const textLen = this.value.length;
+      const cost = (textLen / 1000) * 0.015;
+      document.getElementById('charCount').innerText = `Characters: ${textLen} | Estimated cost: $${cost.toFixed(3)}`;
+    });
+
+    document.getElementById('generateBtn').addEventListener('click', async () => {
+      const title = document.getElementById('title').value;
+      const text = document.getElementById('text').value;
+      const voice = document.getElementById('voice').value;
+      const estimatedCost = ((text.length / 1000) * 0.015).toFixed(3);
+
+      // Indicate loading state
+      const generateBtn = document.getElementById('generateBtn');
+      generateBtn.disabled = true;
+      generateBtn.innerText = 'Generating...';
+
+      const response = await fetch(`${API_BASE}/generate-audio`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, text, voice })
+      });
+      
+      const result = await response.json();
+      generateBtn.disabled = false;
+      generateBtn.innerText = 'Generate Audio';
+
+      if (result.audioBase64) {
+        const binary = atob(result.audioBase64);
+        const array = [];
+        for (let i = 0; i < binary.length; i++) {
+          array.push(binary.charCodeAt(i));
+        }
+        const blob = new Blob([new Uint8Array(array)], { type: 'audio/mpeg' });
+        const blobUrl = URL.createObjectURL(blob);
+
+        const audioList = document.getElementById('audioList');
+        const item = document.createElement('div');
+        item.className = 'audio-item';
+        item.innerHTML = `
+          <h3>${result.title}</h3>
+          <audio controls src="${blobUrl}"></audio><br/>
+          <a href="${blobUrl}" download="${result.title}.mp3">Download ${result.title}.mp3</a>
+          <p>Estimated cost for this file: $${estimatedCost}</p>
+        `;
+        audioList.prepend(item);
+      } else {
+        alert('Failed to generate audio.');
+      }
+    });
+  </script>
+</body>
+</html>
