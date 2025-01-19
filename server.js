@@ -1,5 +1,3 @@
-// server.js
-
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -37,16 +35,21 @@ app.post('/generate-audio', async (req, res) => {
     // Using 4000 characters as chunk size
     const chunkSize = 4000;
     let chunks = [];
-    for (let i = 0; i < text.length; i += chunkSize) {
-      let end = i + chunkSize;
+    let start = 0;
+
+    while (start < text.length) {
+      let end = start + chunkSize;
+
+      // Try to break at a punctuation mark for a cleaner split
       if (end < text.length) {
         const punctuationIndex = text.lastIndexOf('.', end);
-        if (punctuationIndex > i) {
+        if (punctuationIndex > start) {
           end = punctuationIndex + 1;
         }
       }
-      chunks.push(text.slice(i, end));
-      i = end - 1;
+
+      chunks.push(text.slice(start, end));
+      start = end;  // Move start to the end of the current chunk
     }
 
     let tempFiles = [];
@@ -60,7 +63,7 @@ app.post('/generate-audio', async (req, res) => {
         },
         body: JSON.stringify({
           model: 'tts-1',
-          voice: voice || 'alloy',
+          voice: voice || 'echo',
           input: chunk
         })
       });
