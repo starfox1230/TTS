@@ -98,10 +98,8 @@
   </div>
   
   <script>
-    // Replace with your actual backend URL deployed on Render
     const API_BASE = 'https://tts-jeh9.onrender.com';
 
-    // Warm-up call on page load
     window.addEventListener('load', async () => {
       const warmUpMessage = document.getElementById('warmUpMessage');
       try {
@@ -113,7 +111,6 @@
       }
     });
 
-    // Character count and estimated cost calculation
     document.getElementById('text').addEventListener('input', function() {
       const textLen = this.value.length;
       const cost = (textLen / 1000) * 0.015;
@@ -125,11 +122,20 @@
       const text = document.getElementById('text').value;
       const voice = document.getElementById('voice').value;
 
-      // Clear previous status messages
       const statusDiv = document.getElementById('statusMessages');
       statusDiv.innerText = '';
 
-      // Start SSE connection for status updates
+      let dotInterval;  // To control the dot animation
+
+      function setStatusWithDots(baseText) {
+        clearInterval(dotInterval);
+        let dotCount = 0;
+        dotInterval = setInterval(() => {
+          dotCount = (dotCount % 3) + 1;
+          statusDiv.innerText = baseText + ' ' + '.'.repeat(dotCount);
+        }, 500);
+      }
+
       const eventSource = new EventSource(`${API_BASE}/generate-audio-stream?` +
         `title=${encodeURIComponent(title)}&` +
         `text=${encodeURIComponent(text)}&` +
@@ -139,12 +145,15 @@
         const data = JSON.parse(e.data);
 
         if (data.status) {
-          statusDiv.innerText = data.status;
+          setStatusWithDots(data.status);
         } else if (data.error) {
+          clearInterval(dotInterval);
           statusDiv.innerText = data.error;
           eventSource.close();
         } else if (data.audioBase64 && data.title) {
-          // Process final audio result
+          clearInterval(dotInterval);
+          statusDiv.innerText = 'Process complete.';
+          
           const binary = atob(data.audioBase64);
           const array = [];
           for (let i = 0; i < binary.length; i++) {
@@ -163,13 +172,13 @@
           `;
           audioList.prepend(item);
 
-          statusDiv.innerText = 'Process complete.';
           eventSource.close();
         }
       };
 
       eventSource.onerror = function(e) {
         console.error("EventSource failed: ", e);
+        clearInterval(dotInterval);
         statusDiv.innerText = "An error occurred while receiving updates.";
         eventSource.close();
       };
