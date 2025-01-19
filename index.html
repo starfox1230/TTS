@@ -96,53 +96,37 @@
     <div class="audio-list" id="audioList"></div>
   </div>
   
-  <script>
-    // Replace with your actual backend URL deployed on Render
-    const API_BASE = 'https://tts-jeh9.onrender.com';
+  
+  
+  
+<script>
+  const API_BASE = 'https://tts-jeh9.onrender.com';
 
-    // Warm-up call on page load
-    window.addEventListener('load', async () => {
-      const warmUpMessage = document.getElementById('warmUpMessage');
-      try {
-        await fetch(API_BASE + '/');
-        warmUpMessage.innerText = 'Server is ready!';
-        // Optionally remove the message after a delay
-        setTimeout(() => warmUpMessage.style.display = 'none', 2000);
-      } catch(e) {
-        warmUpMessage.innerText = 'Error contacting server.';
-      }
-    });
+  document.getElementById('generateBtn').addEventListener('click', () => {
+    const title = document.getElementById('title').value;
+    const text = document.getElementById('text').value;
+    const voice = document.getElementById('voice').value;
 
-    // Character count and estimated cost calculation
-    document.getElementById('text').addEventListener('input', function() {
-      const textLen = this.value.length;
-      const cost = (textLen / 1000) * 0.015;
-      document.getElementById('charCount').innerText = `Characters: ${textLen} | Estimated cost: $${cost.toFixed(3)}`;
-    });
+    const statusDiv = document.createElement('div');
+    statusDiv.id = 'statusMessages';
+    document.body.insertBefore(statusDiv, document.getElementById('audioList'));
 
-    document.getElementById('generateBtn').addEventListener('click', async () => {
-      const title = document.getElementById('title').value;
-      const text = document.getElementById('text').value;
-      const voice = document.getElementById('voice').value;
-      const estimatedCost = ((text.length / 1000) * 0.015).toFixed(3);
+    const eventSource = new EventSource(`${API_BASE}/generate-audio-stream?` +
+      `title=${encodeURIComponent(title)}&` +
+      `text=${encodeURIComponent(text)}&` +
+      `voice=${encodeURIComponent(voice)}`);
 
-      // Indicate loading state
-      const generateBtn = document.getElementById('generateBtn');
-      generateBtn.disabled = true;
-      generateBtn.innerText = 'Generating...';
+    eventSource.onmessage = function(e) {
+      const data = JSON.parse(e.data);
 
-      const response = await fetch(`${API_BASE}/generate-audio`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title, text, voice })
-      });
-      
-      const result = await response.json();
-      generateBtn.disabled = false;
-      generateBtn.innerText = 'Generate Audio';
-
-      if (result.audioBase64) {
-        const binary = atob(result.audioBase64);
+      if (data.status) {
+        statusDiv.innerText = data.status;
+      } else if (data.error) {
+        statusDiv.innerText = data.error;
+        eventSource.close();
+      } else if (data.audioBase64 && data.title) {
+        // Process final audio result
+        const binary = atob(data.audioBase64);
         const array = [];
         for (let i = 0; i < binary.length; i++) {
           array.push(binary.charCodeAt(i));
@@ -154,16 +138,27 @@
         const item = document.createElement('div');
         item.className = 'audio-item';
         item.innerHTML = `
-          <h3>${result.title}</h3>
+          <h3>${data.title}</h3>
           <audio controls src="${blobUrl}"></audio><br/>
-          <a href="${blobUrl}" download="${result.title}.mp3">Download ${result.title}.mp3</a>
-          <p>Estimated cost for this file: $${estimatedCost}</p>
+          <a href="${blobUrl}" download="${data.title}.mp3">Download ${data.title}.mp3</a>
         `;
         audioList.prepend(item);
-      } else {
-        alert('Failed to generate audio.');
+
+        statusDiv.innerText = 'Process complete.';
+        eventSource.close();
       }
-    });
-  </script>
+    };
+
+    eventSource.onerror = function(e) {
+      console.error("EventSource failed: ", e);
+      statusDiv.innerText = "An error occurred while receiving updates.";
+      eventSource.close();
+    };
+  });
+</script>
+  
+  
+  
+  
 </body>
 </html>
