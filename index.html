@@ -49,6 +49,11 @@
       font-size: 1em;
       color: #90caf9;
     }
+    #charCount {
+      margin-top: 5px;
+      font-size: 0.9em;
+      color: #bbb;
+    }
   </style>
 </head>
 <body>
@@ -56,8 +61,8 @@
     <h1>TTS Two-Step Generator</h1>
     <input type="text" id="title" placeholder="Enter title">
     <textarea id="text" rows="6" placeholder="Enter text here"></textarea>
+    <div id="charCount">Characters: 0 | Estimated cost: $0.000</div>
     <select id="voice">
-      <!-- Default voice set to Echo -->
       <option value="echo" selected>Echo</option>
       <option value="ash">Ash</option>
       <option value="alloy">Alloy</option>
@@ -74,11 +79,17 @@
 
   <script>
     const API_BASE = 'https://tts-jeh9.onrender.com'; 
-    // Replace with your actual server URL if different
-
     const generateBtn = document.getElementById('generateBtn');
     const statusDiv = document.getElementById('statusMessages');
     const audioList = document.getElementById('audioList');
+    const charCountDiv = document.getElementById('charCount');
+
+    // Character count and cost prediction
+    document.getElementById('text').addEventListener('input', function() {
+      const textLen = this.value.length;
+      const cost = (textLen / 1000) * 0.015;
+      charCountDiv.innerText = `Characters: ${textLen} | Estimated cost: $${cost.toFixed(3)}`;
+    });
 
     generateBtn.addEventListener('click', async () => {
       statusDiv.innerText = '';
@@ -89,7 +100,7 @@
       const voice = document.getElementById('voice').value;
 
       try {
-        // Step 1: Send a POST request to initiate generation
+        // Step 1: Initiate audio generation
         const initResponse = await fetch(`${API_BASE}/initiate-audio-generation`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -100,11 +111,9 @@
         }
         const initData = await initResponse.json();
         const requestId = initData.requestId;
-        if (!requestId) {
-          throw new Error('No requestId returned from server.');
-        }
+        if (!requestId) throw new Error('No requestId returned from server.');
 
-        // Step 2: Open SSE connection using the requestId
+        // Step 2: Open SSE connection using requestId
         const eventSource = new EventSource(`${API_BASE}/generate-audio-stream?requestId=${encodeURIComponent(requestId)}`);
 
         eventSource.onmessage = (e) => {
