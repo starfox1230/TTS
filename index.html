@@ -2,8 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>TTS App</title>
+  <title>TTS Two-Step Demo</title>
   <style>
     body {
       background-color: #121212;
@@ -30,40 +29,11 @@
       cursor: pointer;
     }
     button:hover { background: #1565c0; }
-    .audio-list { margin-top: 20px; }
-    .audio-item { margin-bottom: 20px; }
-    a { color: #90caf9; text-decoration: none; }
-    a:hover { text-decoration: underline; }
-    #warmUpMessage {
-      background: #333;
+    .audio-item {
+      margin-top: 20px;
+      border: 1px solid #444;
       padding: 10px;
       border-radius: 4px;
-      margin-bottom: 20px;
-      text-align: center;
-    }
-    #charCount {
-      margin-top: 5px;
-      font-size: 0.9em;
-      color: #bbb;
-    }
-    select {
-      width: 100%;
-      padding: 10px;
-      margin-top: 10px;
-      border: none;
-      border-radius: 4px;
-      background: #1e1e1e;
-      color: #e0e0e0;
-      appearance: none;
-      cursor: pointer;
-    }
-    select:focus {
-      outline: none;
-      border: 1px solid #1e88e5;
-    }
-    option {
-      background: #1e1e1e;
-      color: #e0e0e0;
     }
     #statusMessages {
       margin-top: 10px;
@@ -74,12 +44,9 @@
 </head>
 <body>
   <div class="container">
-    <div id="warmUpMessage">Warming up the server, please wait...</div>
-    <h1>TTS Generator</h1>
-    <input type="text" id="title" placeholder="Enter title" />
-    <textarea id="text" rows="6" placeholder="Enter text"></textarea>
-    <div id="charCount">Characters: 0 | Estimated cost: $0.000</div>
-
+    <h1>TTS Two-Step Generator</h1>
+    <input type="text" id="title" placeholder="Enter title">
+    <textarea id="text" rows="6" placeholder="Enter text here"></textarea>
     <select id="voice">
       <option value="">Select a voice (optional)</option>
       <option value="echo">Echo</option>
@@ -89,99 +56,95 @@
       <option value="onyx">Onyx</option>
       <option value="nova">Nova</option>
       <option value="shimmer">Shimmer</option>
-      <!-- Add more voice options as needed -->
     </select>
-
     <button id="generateBtn">Generate Audio</button>
+    
     <div id="statusMessages"></div>
-    <div class="audio-list" id="audioList"></div>
+    <div id="audioList"></div>
   </div>
-  
+
   <script>
-    const API_BASE = 'https://tts-jeh9.onrender.com';
+    const API_BASE = 'https://tts-jeh9.onrender.com'; 
+    // Replace with your actual server URL if different
 
-    window.addEventListener('load', async () => {
-      const warmUpMessage = document.getElementById('warmUpMessage');
-      try {
-        await fetch(API_BASE + '/');
-        warmUpMessage.innerText = 'Server is ready!';
-        setTimeout(() => warmUpMessage.style.display = 'none', 2000);
-      } catch(e) {
-        warmUpMessage.innerText = 'Error contacting server.';
-      }
-    });
+    const generateBtn = document.getElementById('generateBtn');
+    const statusDiv = document.getElementById('statusMessages');
+    const audioList = document.getElementById('audioList');
 
-    document.getElementById('text').addEventListener('input', function() {
-      const textLen = this.value.length;
-      const cost = (textLen / 1000) * 0.015;
-      document.getElementById('charCount').innerText = `Characters: ${textLen} | Estimated cost: $${cost.toFixed(3)}`;
-    });
+    generateBtn.addEventListener('click', async () => {
+      statusDiv.innerText = '';
+      audioList.innerHTML = '';
 
-    document.getElementById('generateBtn').addEventListener('click', () => {
-      const title = document.getElementById('title').value;
+      const title = document.getElementById('title').value || 'Untitled';
       const text = document.getElementById('text').value;
       const voice = document.getElementById('voice').value;
 
-      const statusDiv = document.getElementById('statusMessages');
-      statusDiv.innerText = '';
-
-      let dotInterval;  // To control the dot animation
-
-      function setStatusWithDots(baseText) {
-        clearInterval(dotInterval);
-        let dotCount = 0;
-        dotInterval = setInterval(() => {
-          dotCount = (dotCount % 3) + 1;
-          statusDiv.innerText = baseText + ' ' + '.'.repeat(dotCount);
-        }, 500);
-      }
-
-      const eventSource = new EventSource(`${API_BASE}/generate-audio-stream?` +
-        `title=${encodeURIComponent(title)}&` +
-        `text=${encodeURIComponent(text)}&` +
-        `voice=${encodeURIComponent(voice)}`);
-
-      eventSource.onmessage = function(e) {
-        const data = JSON.parse(e.data);
-
-        if (data.status) {
-          setStatusWithDots(data.status);
-        } else if (data.error) {
-          clearInterval(dotInterval);
-          statusDiv.innerText = data.error;
-          eventSource.close();
-        } else if (data.audioBase64 && data.title) {
-          clearInterval(dotInterval);
-          statusDiv.innerText = 'Process complete.';
-          
-          const binary = atob(data.audioBase64);
-          const array = [];
-          for (let i = 0; i < binary.length; i++) {
-            array.push(binary.charCodeAt(i));
-          }
-          const blob = new Blob([new Uint8Array(array)], { type: 'audio/mpeg' });
-          const blobUrl = URL.createObjectURL(blob);
-
-          const audioList = document.getElementById('audioList');
-          const item = document.createElement('div');
-          item.className = 'audio-item';
-          item.innerHTML = `
-            <h3>${data.title}</h3>
-            <audio controls src="${blobUrl}"></audio><br/>
-            <a href="${blobUrl}" download="${data.title}.mp3">Download ${data.title}.mp3</a>
-          `;
-          audioList.prepend(item);
-
-          eventSource.close();
+      // Step 1: POST to /initiate-audio-generation
+      // to receive a requestId for the SSE step
+      try {
+        const initResponse = await fetch(`${API_BASE}/initiate-audio-generation`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title, text, voice })
+        });
+        if (!initResponse.ok) {
+          throw new Error(`Initiation request failed: ${initResponse.statusText}`);
         }
-      };
+        const initData = await initResponse.json();
+        const requestId = initData.requestId;
+        if (!requestId) {
+          throw new Error('No requestId returned from server.');
+        }
 
-      eventSource.onerror = function(e) {
-        console.error("EventSource failed: ", e);
-        clearInterval(dotInterval);
-        statusDiv.innerText = "An error occurred while receiving updates.";
-        eventSource.close();
-      };
+        // Step 2: Open SSE to /generate-audio-stream?requestId=...
+        const eventSource = new EventSource(`${API_BASE}/generate-audio-stream?requestId=${encodeURIComponent(requestId)}`);
+
+        eventSource.onmessage = (e) => {
+          // Parse the SSE message
+          const data = JSON.parse(e.data);
+          if (data.status) {
+            // Update status
+            statusDiv.innerText = data.status;
+          } else if (data.error) {
+            // Display error
+            statusDiv.innerText = `Error: ${data.error}`;
+            eventSource.close();
+          } else if (data.audioBase64 && data.title) {
+            // Final audio data
+            statusDiv.innerText = 'Process complete.';
+            // Convert base64 to Blob
+            const binary = atob(data.audioBase64);
+            const array = [];
+            for (let i = 0; i < binary.length; i++) {
+              array.push(binary.charCodeAt(i));
+            }
+            const blob = new Blob([new Uint8Array(array)], { type: 'audio/mpeg' });
+            const blobUrl = URL.createObjectURL(blob);
+
+            // Create audio item
+            const item = document.createElement('div');
+            item.className = 'audio-item';
+            item.innerHTML = `
+              <h3>${data.title}</h3>
+              <audio controls src="${blobUrl}"></audio><br/>
+              <a href="${blobUrl}" download="${data.title}.mp3">Download ${data.title}.mp3</a>
+            `;
+            audioList.prepend(item);
+
+            // Close SSE
+            eventSource.close();
+          }
+        };
+
+        eventSource.onerror = (err) => {
+          console.error('SSE Error:', err);
+          statusDiv.innerText = 'An error occurred while receiving updates.';
+          eventSource.close();
+        };
+      } catch (error) {
+        console.error('Generation Error:', error);
+        statusDiv.innerText = `Generation Error: ${error.message}`;
+      }
     });
   </script>
 </body>
