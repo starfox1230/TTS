@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>TTS Two-Step Demo</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TTS Two-Step Generator</title>
   <style>
     body {
       background-color: #121212;
@@ -12,14 +13,14 @@
       padding: 20px;
     }
     .container { max-width: 800px; margin: auto; }
-    input, textarea, button {
+    input, textarea, button, select {
       width: 100%;
       padding: 10px;
       margin-top: 10px;
       border: none;
       border-radius: 4px;
     }
-    input, textarea {
+    input, textarea, select {
       background: #1e1e1e;
       color: #e0e0e0;
     }
@@ -34,6 +35,14 @@
       border: 1px solid #444;
       padding: 10px;
       border-radius: 4px;
+      background: #1e1e1e;
+    }
+    .audio-item a {
+      color: #90caf9;
+      text-decoration: none;
+    }
+    .audio-item a:hover {
+      text-decoration: underline;
     }
     #statusMessages {
       margin-top: 10px;
@@ -48,8 +57,8 @@
     <input type="text" id="title" placeholder="Enter title">
     <textarea id="text" rows="6" placeholder="Enter text here"></textarea>
     <select id="voice">
-      <option value="">Select a voice (optional)</option>
-      <option value="echo">Echo</option>
+      <!-- Default voice set to Echo -->
+      <option value="echo" selected>Echo</option>
       <option value="ash">Ash</option>
       <option value="alloy">Alloy</option>
       <option value="fable">Fable</option>
@@ -79,9 +88,8 @@
       const text = document.getElementById('text').value;
       const voice = document.getElementById('voice').value;
 
-      // Step 1: POST to /initiate-audio-generation
-      // to receive a requestId for the SSE step
       try {
+        // Step 1: Send a POST request to initiate generation
         const initResponse = await fetch(`${API_BASE}/initiate-audio-generation`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -96,23 +104,18 @@
           throw new Error('No requestId returned from server.');
         }
 
-        // Step 2: Open SSE to /generate-audio-stream?requestId=...
+        // Step 2: Open SSE connection using the requestId
         const eventSource = new EventSource(`${API_BASE}/generate-audio-stream?requestId=${encodeURIComponent(requestId)}`);
 
         eventSource.onmessage = (e) => {
-          // Parse the SSE message
           const data = JSON.parse(e.data);
           if (data.status) {
-            // Update status
             statusDiv.innerText = data.status;
           } else if (data.error) {
-            // Display error
             statusDiv.innerText = `Error: ${data.error}`;
             eventSource.close();
           } else if (data.audioBase64 && data.title) {
-            // Final audio data
             statusDiv.innerText = 'Process complete.';
-            // Convert base64 to Blob
             const binary = atob(data.audioBase64);
             const array = [];
             for (let i = 0; i < binary.length; i++) {
@@ -121,7 +124,6 @@
             const blob = new Blob([new Uint8Array(array)], { type: 'audio/mpeg' });
             const blobUrl = URL.createObjectURL(blob);
 
-            // Create audio item
             const item = document.createElement('div');
             item.className = 'audio-item';
             item.innerHTML = `
@@ -131,7 +133,6 @@
             `;
             audioList.prepend(item);
 
-            // Close SSE
             eventSource.close();
           }
         };
