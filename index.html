@@ -54,10 +54,18 @@
       font-size: 0.9em;
       color: #bbb;
     }
+    #warmUpMessage {
+      background: #333;
+      padding: 10px;
+      border-radius: 4px;
+      margin-bottom: 20px;
+      text-align: center;
+    }
   </style>
 </head>
 <body>
   <div class="container">
+    <div id="warmUpMessage">Warming up the server, please wait...</div>
     <h1>TTS Two-Step Generator</h1>
     <input type="text" id="title" placeholder="Enter title">
     <textarea id="text" rows="6" placeholder="Enter text here"></textarea>
@@ -78,7 +86,20 @@
   </div>
 
   <script>
-    const API_BASE = 'https://tts-jeh9.onrender.com'; 
+    const API_BASE = 'https://tts-jeh9.onrender.com';
+    const warmUpMessage = document.getElementById('warmUpMessage');
+
+    // Warm-up logic on page load
+    window.addEventListener('load', async () => {
+      try {
+        await fetch(API_BASE + '/');
+        warmUpMessage.innerText = 'Server is ready!';
+        setTimeout(() => warmUpMessage.style.display = 'none', 2000);
+      } catch(e) {
+        warmUpMessage.innerText = 'Error contacting server.';
+      }
+    });
+
     const generateBtn = document.getElementById('generateBtn');
     const statusDiv = document.getElementById('statusMessages');
     const audioList = document.getElementById('audioList');
