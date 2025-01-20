@@ -1,10 +1,13 @@
+/****************************************************
+ * server.js
+ ****************************************************/
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import fs from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
-import { spawn } from 'child_process';
+import { spawn, execSync } from 'child_process';
 import { Configuration, OpenAIApi } from 'openai';
 
 dotenv.config();
@@ -25,22 +28,36 @@ app.use(
 );
 app.use(express.json());
 
-// In-memory store for requests
+// In-memory store for requests (temporary)
 const requests = new Map();
 
-// New endpoint to initiate audio generation and store large text
+/**
+ * 1. POST /initiate-audio-generation
+ *    - Accepts large text via JSON body
+ *    - Returns a unique requestId
+ */
 app.post('/initiate-audio-generation', async (req, res) => {
   const { title, text, voice } = req.body;
   if (!title || !text) {
     return res.status(400).json({ error: 'Title and text are required.' });
   }
+
   // Generate a unique requestId
   const requestId = Date.now().toString() + Math.random().toString(36).substring(2);
+  // Store request data in-memory
   requests.set(requestId, { title, text, voice });
+  
+  // Return the requestId to the client
   res.json({ requestId });
 });
 
-// Updated SSE endpoint using requestId
+/**
+ * 2. GET /generate-audio-stream?requestId=...
+ *    - Streams status updates via SSE
+ *    - Retrieves data from requests map using requestId
+ *    - Splits text into chunks, calls OpenAI TTS, concatenates files with FFmpeg
+ *    - Sends final audio back as base64
+ */
 app.get('/generate-audio-stream', async (req, res) => {
   const { requestId } = req.query;
   if (!requestId) {
@@ -49,17 +66,20 @@ app.get('/generate-audio-stream', async (req, res) => {
     return res.end();
   }
 
+  // Retrieve stored data
   const storedData = requests.get(requestId);
   if (!storedData) {
     res.writeHead(404, { 'Content-Type': 'text/event-stream' });
     res.write('data: {"error": "No data found for the given requestId."}\n\n');
     return res.end();
   }
-  // Optionally remove the request from store after retrieval
+
+  // Optionally remove the request from the map to avoid memory buildup
   requests.delete(requestId);
 
   const { title, text, voice } = storedData;
 
+  // Setup SSE headers
   res.set({
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
@@ -68,7 +88,7 @@ app.get('/generate-audio-stream', async (req, res) => {
   res.flushHeaders();
 
   try {
-    // 1. Splitting text into chunks
+    // 1) Split text into 4000-character chunks
     res.write(`data: {"status":"Splitting text into chunks..."}\n\n`);
     const chunkSize = 4000;
     let chunks = [];
@@ -85,11 +105,13 @@ app.get('/generate-audio-stream', async (req, res) => {
       start = end;
     }
 
-    // 2. Generating audio for each chunk
+    // 2) Generate audio for each chunk via OpenAI TTS
     let tempFiles = [];
     for (let i = 0; i < chunks.length; i++) {
       res.write(`data: {"status":"Generating audio for chunk ${i + 1} of ${chunks.length}"}\n\n`);
       const chunk = chunks[i];
+      
+      // Call the OpenAI TTS endpoint
       const response = await fetch("https://api.openai.com/v1/audio/speech", {
         method: "POST",
         headers: {
@@ -114,7 +136,7 @@ app.get('/generate-audio-stream', async (req, res) => {
       tempFiles.push(tempPath);
     }
 
-    // 3. Concatenating audio files without re-encoding
+    // 3) Concatenate all chunk files without re-encoding (FFmpeg concat demuxer)
     res.write(`data: {"status":"Concatenating audio files..."}\n\n`);
     const fileListPath = path.join(tmpdir(), 'filelist.txt');
     const listContent = tempFiles.map(file => `file '${file}'`).join('\n');
@@ -122,6 +144,7 @@ app.get('/generate-audio-stream', async (req, res) => {
 
     const concatenatedPath = path.join(tmpdir(), `concatenated_${Date.now()}.mp3`);
 
+    // Use async spawn for non-blocking FFmpeg
     await new Promise((resolve, reject) => {
       const ffmpegProcess = spawn('ffmpeg', [
         '-f', 'concat',
@@ -147,7 +170,7 @@ app.get('/generate-audio-stream', async (req, res) => {
     const finalBuffer = fs.readFileSync(concatenatedPath);
     const base64Audio = finalBuffer.toString('base64');
 
-    // 4. Cleaning up temporary files
+    // Clean up temp files
     tempFiles.forEach(f => fs.unlinkSync(f));
     fs.unlinkSync(fileListPath);
     fs.unlinkSync(concatenatedPath);
@@ -162,7 +185,11 @@ app.get('/generate-audio-stream', async (req, res) => {
   }
 });
 
-// Existing non-streaming endpoint remains unchanged
+/**
+ * 3. POST /generate-audio (Non-streaming, if desired)
+ *    - Original endpoint without SSE
+ *    - Used for smaller text or simpler approach
+ */
 app.post('/generate-audio', async (req, res) => {
   try {
     const { title, text, voice } = req.body;
@@ -170,6 +197,7 @@ app.post('/generate-audio', async (req, res) => {
       return res.status(400).json({ error: 'Title and text are required.' });
     }
 
+    // Same chunk-splitting logic
     const chunkSize = 4000;
     let chunks = [];
     let start = 0;
@@ -212,13 +240,13 @@ app.post('/generate-audio', async (req, res) => {
       tempFiles.push(tempPath);
     }
 
+    // For non-streaming, using execSync is okay
     const fileListPath = path.join(tmpdir(), 'filelist.txt');
     const listContent = tempFiles.map(file => `file '${file}'`).join('\n');
     fs.writeFileSync(fileListPath, listContent);
 
     const concatenatedPath = path.join(tmpdir(), `concatenated_${Date.now()}.mp3`);
-    // For non-streaming endpoint, using execSync is still acceptable
-    require('child_process').execSync(`ffmpeg -f concat -safe 0 -i ${fileListPath} -c copy ${concatenatedPath}`);
+    execSync(`ffmpeg -f concat -safe 0 -i ${fileListPath} -c copy ${concatenatedPath}`);
 
     const finalBuffer = fs.readFileSync(concatenatedPath);
     const base64Audio = finalBuffer.toString('base64');
@@ -227,10 +255,10 @@ app.post('/generate-audio', async (req, res) => {
     fs.unlinkSync(fileListPath);
     fs.unlinkSync(concatenatedPath);
 
-    res.status(200).json({ 
-      message: 'Audio generated successfully.', 
-      title, 
-      audioBase64: base64Audio 
+    res.status(200).json({
+      message: 'Audio generated successfully.',
+      title,
+      audioBase64: base64Audio
     });
   } catch (error) {
     console.error('Error generating audio:', error);
@@ -238,6 +266,9 @@ app.post('/generate-audio', async (req, res) => {
   }
 });
 
+/**
+ * Root endpoint for quick check
+ */
 app.get('/', (req, res) => {
   res.send('TTS API is ready.');
 });
