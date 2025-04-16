@@ -37,7 +37,7 @@ const requests = new Map();
  *    - Returns a unique requestId
  */
 app.post('/initiate-audio-generation', async (req, res) => {
-  const { title, text, voice } = req.body;
+  const { title, text, voice, model } = req.body;
   if (!title || !text) {
     return res.status(400).json({ error: 'Title and text are required.' });
   }
@@ -45,7 +45,7 @@ app.post('/initiate-audio-generation', async (req, res) => {
   // Generate a unique requestId
   const requestId = Date.now().toString() + Math.random().toString(36).substring(2);
   // Store request data in-memory
-  requests.set(requestId, { title, text, voice });
+  requests.set(requestId, { title, text, voice, model });
   
   // Return the requestId to the client
   res.json({ requestId });
@@ -112,6 +112,7 @@ app.get('/generate-audio-stream', async (req, res) => {
       const chunk = chunks[i];
       
       // Call the OpenAI TTS endpoint
+      const ttsModel = storedData.model || 'tts-1';
       const response = await fetch("https://api.openai.com/v1/audio/speech", {
         method: "POST",
         headers: {
@@ -119,11 +120,13 @@ app.get('/generate-audio-stream', async (req, res) => {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          model: 'tts-1',
-          voice: voice || 'alloy',
-          input: chunk
+          model: ttsModel,
+          voice: storedData.voice || 'alloy',
+          input: chunk,
+          response_format: "mp3"
         })
       });
+
 
       if (!response.ok) {
         throw new Error(`OpenAI API error: ${response.status} ${response.statusText}`);
