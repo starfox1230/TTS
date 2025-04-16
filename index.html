@@ -70,6 +70,11 @@
     <input type="text" id="title" placeholder="Enter title">
     <textarea id="text" rows="6" placeholder="Enter text here"></textarea>
     <div id="charCount">Characters: 0 | Estimated cost: $0.000</div>
+    <label for="model">Choose TTS Model:</label>
+    <select id="model">
+      <option value="gpt-4o-mini-tts" selected>GPT‑4o Mini TTS (new)</option>
+      <option value="tts-1">Standard TTS (old)</option>
+    </select>
     <select id="voice">
       <option value="echo" selected>Echo</option>
       <option value="ash">Ash</option>
@@ -106,11 +111,16 @@
     const charCountDiv = document.getElementById('charCount');
 
     // Character count and cost prediction
+    const modelSelect = document.getElementById('model');
+    const rates = { 'gpt-4o-mini-tts': 0.0006, 'tts-1': 0.015 };
+
     document.getElementById('text').addEventListener('input', function() {
       const textLen = this.value.length;
-      const cost = (textLen / 1000) * 0.015;
+      const rate = rates[modelSelect.value];
+      const cost = (textLen / 1000) * rate;
       charCountDiv.innerText = `Characters: ${textLen} | Estimated cost: $${cost.toFixed(3)}`;
     });
+
 
     generateBtn.addEventListener('click', async () => {
       statusDiv.innerText = '';
@@ -125,7 +135,8 @@
         const initResponse = await fetch(`${API_BASE}/initiate-audio-generation`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ title, text, voice })
+          const model = modelSelect.value;
+          body: JSON.stringify({ title, text, voice, model })
         });
         if (!initResponse.ok) {
           throw new Error(`Initiation request failed: ${initResponse.statusText}`);
