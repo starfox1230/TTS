@@ -122,14 +122,20 @@
       }
     });
 
-    // 2) Character count & cost calculator
+    // 2) Character count & cost calculator (text + audio)
     textInput.addEventListener('input', function() {
-      const textLen = this.value.length;
-      const rate    = rates[modelSelect.value] || 0;
-      const cost    = (textLen / 1000) * rate;
-      charCountDiv.innerText = 
-        `Characters: ${textLen} | Estimated cost: $${cost.toFixed(3)}`;
+      const len       = this.value.length;
+      const rate      = charRates[modelSelect.value] || 0;
+      const textCost  = (len / 1000) * rate;
+      const minutes   = len / charsPerMinute;
+      const audioCost = minutes * audioRatePerMin;
+      const totalCost = textCost + audioCost;
+    
+      charCountDiv.innerText =
+        `Chars: ${len} | Text: $${textCost.toFixed(3)} + ` +
+        `Audio: $${audioCost.toFixed(3)} = $${totalCost.toFixed(3)}`;
     });
+
 
     // 3) Generate button handler
     generateBtn.addEventListener('click', async () => {
