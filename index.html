@@ -67,14 +67,18 @@
   <div class="container">
     <div id="warmUpMessage">Warming up the server, please wait...</div>
     <h1>TTS Two-Step Generator</h1>
+
     <input type="text" id="title" placeholder="Enter title">
     <textarea id="text" rows="6" placeholder="Enter text here"></textarea>
     <div id="charCount">Characters: 0 | Estimated cost: $0.000</div>
+
     <label for="model">Choose TTS Model:</label>
     <select id="model">
       <option value="gpt-4o-mini-tts" selected>GPT‑4o Mini TTS (new)</option>
       <option value="tts-1">Standard TTS (old)</option>
     </select>
+
+    <label for="voice">Choose Voice:</label>
     <select id="voice">
       <option value="echo" selected>Echo</option>
       <option value="ash">Ash</option>
@@ -84,6 +88,7 @@
       <option value="nova">Nova</option>
       <option value="shimmer">Shimmer</option>
     </select>
+
     <button id="generateBtn">Generate Audio</button>
     
     <div id="statusMessages"></div>
@@ -93,84 +98,104 @@
   <script>
     const API_BASE = 'https://tts-jeh9.onrender.com';
     const warmUpMessage = document.getElementById('warmUpMessage');
+    const charCountDiv    = document.getElementById('charCount');
+    const modelSelect     = document.getElementById('model');
+    const textInput       = document.getElementById('text');
+    const generateBtn     = document.getElementById('generateBtn');
+    const statusDiv       = document.getElementById('statusMessages');
+    const audioList       = document.getElementById('audioList');
 
-    // Warm-up logic on page load
+    // Rates per 1 000 characters
+    const rates = {
+      'gpt-4o-mini-tts': 0.0006,
+      'tts-1':           0.015
+    };
+
+    // 1) Warm‑up server on page load
     window.addEventListener('load', async () => {
       try {
-        await fetch(API_BASE + '/');
+        await fetch(`${API_BASE}/`);
         warmUpMessage.innerText = 'Server is ready!';
-        setTimeout(() => warmUpMessage.style.display = 'none', 2000);
-      } catch(e) {
+        setTimeout(() => { warmUpMessage.style.display = 'none'; }, 2000);
+      } catch (e) {
         warmUpMessage.innerText = 'Error contacting server.';
       }
     });
 
-    const generateBtn = document.getElementById('generateBtn');
-    const statusDiv = document.getElementById('statusMessages');
-    const audioList = document.getElementById('audioList');
-    const charCountDiv = document.getElementById('charCount');
-
-    // Character count and cost prediction
-    const modelSelect = document.getElementById('model');
-    const rates = { 'gpt-4o-mini-tts': 0.0006, 'tts-1': 0.015 };
-
-    document.getElementById('text').addEventListener('input', function() {
+    // 2) Character count & cost calculator
+    textInput.addEventListener('input', function() {
       const textLen = this.value.length;
-      const rate = rates[modelSelect.value];
-      const cost = (textLen / 1000) * rate;
-      charCountDiv.innerText = `Characters: ${textLen} | Estimated cost: $${cost.toFixed(3)}`;
+      const rate    = rates[modelSelect.value] || 0;
+      const cost    = (textLen / 1000) * rate;
+      charCountDiv.innerText = 
+        `Characters: ${textLen} | Estimated cost: $${cost.toFixed(3)}`;
     });
 
-
+    // 3) Generate button handler
     generateBtn.addEventListener('click', async () => {
       statusDiv.innerText = '';
       audioList.innerHTML = '';
 
-      const title = document.getElementById('title').value || 'Untitled';
-      const text = document.getElementById('text').value;
+      const title = document.getElementById('title').value.trim() || 'Untitled';
+      const text  = textInput.value;
       const voice = document.getElementById('voice').value;
+      const model = modelSelect.value;
 
       try {
-        // Step 1: Initiate audio generation
-        const initResponse = await fetch(`${API_BASE}/initiate-audio-generation`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          const model = modelSelect.value;
-          body: JSON.stringify({ title, text, voice, model })
-        });
-        if (!initResponse.ok) {
-          throw new Error(`Initiation request failed: ${initResponse.statusText}`);
-        }
-        const initData = await initResponse.json();
-        const requestId = initData.requestId;
-        if (!requestId) throw new Error('No requestId returned from server.');
+        // Initiate request
+        const initResponse = await fetch(
+          `${API_BASE}/initiate-audio-generation`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title, text, voice, model })
+          }
+        );
 
-        // Step 2: Open SSE connection using requestId
-        const eventSource = new EventSource(`${API_BASE}/generate-audio-stream?requestId=${encodeURIComponent(requestId)}`);
+        if (!initResponse.ok) {
+          throw new Error(`Initiation failed: ${initResponse.statusText}`);
+        }
+
+        const { requestId } = await initResponse.json();
+        if (!requestId) {
+          throw new Error('No requestId returned from server.');
+        }
+
+        // Open SSE stream
+        const eventSource = new EventSource(
+          `${API_BASE}/generate-audio-stream?requestId=${encodeURIComponent(requestId)}`
+        );
 
         eventSource.onmessage = (e) => {
           const data = JSON.parse(e.data);
+
           if (data.status) {
             statusDiv.innerText = data.status;
-          } else if (data.error) {
+          }
+          else if (data.error) {
             statusDiv.innerText = `Error: ${data.error}`;
             eventSource.close();
-          } else if (data.audioBase64 && data.title) {
+          }
+          else if (data.audioBase64 && data.title) {
             statusDiv.innerText = 'Process complete.';
-            const binary = atob(data.audioBase64);
-            const array = [];
-            for (let i = 0; i < binary.length; i++) {
-              array.push(binary.charCodeAt(i));
-            }
-            const blob = new Blob([new Uint8Array(array)], { type: 'audio/mpeg' });
-            const blobUrl = URL.createObjectURL(blob);
 
+            // Convert base64 to Blob URL
+            const binary = atob(data.audioBase64);
+            const arr    = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) {
+              arr[i] = binary.charCodeAt(i);
+            }
+            const blobUrl = URL.createObjectURL(new Blob([arr], { type: 'audio/mpeg' }));
+
+            // Render audio player
             const item = document.createElement('div');
             item.className = 'audio-item';
             item.innerHTML = `
               <h3>${data.title}</h3>
               <audio controls src="${blobUrl}"></audio><br/>
-              <a href="${blobUrl}" download="${data.title}.mp3">Download ${data.title}.mp3</a>
+              <a href="${blobUrl}" download="${data.title}.mp3">
+                Download ${data.title}.mp3
+              </a>
             `;
             audioList.prepend(item);
 
@@ -180,10 +205,11 @@
 
         eventSource.onerror = (err) => {
           console.error('SSE Error:', err);
-          statusDiv.innerText = 'An error occurred while receiving updates.';
+          statusDiv.innerText = 'Error receiving updates.';
           eventSource.close();
         };
-      } catch (error) {
+      }
+      catch (error) {
         console.error('Generation Error:', error);
         statusDiv.innerText = `Generation Error: ${error.message}`;
       }
