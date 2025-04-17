@@ -80,13 +80,17 @@
 
     <label for="voice">Choose Voice:</label>
     <select id="voice">
-      <option value="echo" selected>Echo</option>
-      <option value="ash">Ash</option>
       <option value="alloy">Alloy</option>
+      <option value="ash">Ash</option>
+      <option value="ballad">Ballad</option>
+      <option value="coral">Coral</option>
+      <option value="echo" selected>Echo</option>
       <option value="fable">Fable</option>
       <option value="onyx">Onyx</option>
       <option value="nova">Nova</option>
+      <option value="sage">Sage</option>
       <option value="shimmer">Shimmer</option>
+      <option value="verse">Verse</option>
     </select>
 
     <button id="generateBtn">Generate Audio</button>
@@ -96,21 +100,24 @@
   </div>
 
   <script>
-    const API_BASE     = 'https://tts-jeh9.onrender.com';
+    const API_BASE      = 'https://tts-jeh9.onrender.com';
     const warmUpMessage = document.getElementById('warmUpMessage');
-    const charCountDiv  = document.getElementById('charCount');
+    const titleInput    = document.getElementById('title');
+    const textInput     = document.getElementById('text');
     const modelSelect   = document.getElementById('model');
     const voiceSelect   = document.getElementById('voice');
-    const textInput     = document.getElementById('text');
+    const charCountDiv  = document.getElementById('charCount');
     const generateBtn   = document.getElementById('generateBtn');
     const statusDiv     = document.getElementById('statusMessages');
     const audioList     = document.getElementById('audioList');
 
-    // Rates per 1 000 characters
-    const rates = {
-      'gpt-4o-mini-tts': 0.0006,
-      'tts-1':           0.015
+    // Constants for cost calculation
+    const charsPerMinute = 920;  // observed average
+    const charRates = {
+      'gpt-4o-mini-tts': 0.0006,  // $0.60 per 1M chars => $0.0006 per 1K
+      'tts-1':           0.015    // $15.00 per 1M chars => $0.015 per 1K
     };
+    const audioRatePerMin = 0.015; // $0.015 per minute of audio
 
     // Map of voices supported by each model
     const voicesByModel = {
@@ -123,49 +130,54 @@
       ]
     };
 
-    // Enable/disable voice options on model change
+    // 1) Filter voice options whenever model changes
     modelSelect.addEventListener('change', () => {
       const valid = voicesByModel[modelSelect.value] || [];
       voiceSelect.querySelectorAll('option').forEach(opt => {
         opt.disabled = !valid.includes(opt.value);
       });
     });
-    // Trigger once on load to filter initial options
+    // Trigger once on load to enforce initial default
     modelSelect.dispatchEvent(new Event('change'));
 
-    // 1) Warm‑up server on page load
+    // 2) Warm‑up server on page load
     window.addEventListener('load', async () => {
       try {
         await fetch(`${API_BASE}/`);
         warmUpMessage.innerText = 'Server is ready!';
-        setTimeout(() => { warmUpMessage.style.display = 'none'; }, 2000);
+        setTimeout(() => warmUpMessage.style.display = 'none', 2000);
       } catch (e) {
         warmUpMessage.innerText = 'Error contacting server.';
       }
     });
 
-    // 2) Character count & cost calculator
+    // 3) Character & cost estimator (text + audio)
     textInput.addEventListener('input', function() {
-      const len  = this.value.length;
-      const rate = rates[modelSelect.value] || 0;
-      const cost = (len / 1000) * rate;
-      charCountDiv.innerText = 
-        `Characters: ${len} | Estimated cost: $${cost.toFixed(3)}`;
+      const len       = this.value.length;
+      const rate      = charRates[modelSelect.value] || 0;
+      const textCost  = (len / 1000) * rate;
+      const minutes   = len / charsPerMinute;
+      const audioCost = minutes * audioRatePerMin;
+      const totalCost = textCost + audioCost;
+
+      charCountDiv.innerText =
+        `Chars: ${len} | Text: $${textCost.toFixed(3)} + ` +
+        `Audio: $${audioCost.toFixed(3)} = $${totalCost.toFixed(3)}`;
     });
 
-    // 3) Generate button handler
+    // 4) Generate button handler
     generateBtn.addEventListener('click', async () => {
       statusDiv.innerText = '';
       audioList.innerHTML = '';
 
-      const title = document.getElementById('title').value.trim() || 'Untitled';
+      const title = titleInput.value.trim() || 'Untitled';
       const text  = textInput.value;
       const voice = voiceSelect.value;
       const model = modelSelect.value;
 
       try {
         // Initiate request
-        const initResponse = await fetch(
+        const initRes = await fetch(
           `${API_BASE}/initiate-audio-generation`,
           {
             method: 'POST',
@@ -173,37 +185,29 @@
             body: JSON.stringify({ title, text, voice, model })
           }
         );
-
-        if (!initResponse.ok) {
-          throw new Error(`Initiation failed: ${initResponse.statusText}`);
-        }
-
-        const { requestId } = await initResponse.json();
+        if (!initRes.ok) throw new Error(`Initiation failed: ${initRes.statusText}`);
+        const { requestId } = await initRes.json();
         if (!requestId) throw new Error('No requestId returned.');
 
-        // Open SSE stream
-        const eventSource = new EventSource(
+        // Open SSE for streaming updates
+        const es = new EventSource(
           `${API_BASE}/generate-audio-stream?requestId=${encodeURIComponent(requestId)}`
         );
-
-        eventSource.onmessage = (e) => {
+        es.onmessage = (e) => {
           const data = JSON.parse(e.data);
-
           if (data.status) {
             statusDiv.innerText = data.status;
           } else if (data.error) {
             statusDiv.innerText = `Error: ${data.error}`;
-            eventSource.close();
+            es.close();
           } else if (data.audioBase64 && data.title) {
             statusDiv.innerText = 'Process complete.';
-
             const binary = atob(data.audioBase64);
             const arr    = new Uint8Array(binary.length);
             for (let i = 0; i < binary.length; i++) {
               arr[i] = binary.charCodeAt(i);
             }
             const blobUrl = URL.createObjectURL(new Blob([arr], { type: 'audio/mpeg' }));
-
             const item = document.createElement('div');
             item.className = 'audio-item';
             item.innerHTML = `
@@ -214,19 +218,17 @@
               </a>
             `;
             audioList.prepend(item);
-
-            eventSource.close();
+            es.close();
           }
         };
-
-        eventSource.onerror = (err) => {
+        es.onerror = (err) => {
           console.error('SSE Error:', err);
           statusDiv.innerText = 'Error receiving updates.';
-          eventSource.close();
+          es.close();
         };
-      } catch (error) {
-        console.error('Generation Error:', error);
-        statusDiv.innerText = `Generation Error: ${error.message}`;
+      } catch (err) {
+        console.error('Generation Error:', err);
+        statusDiv.innerText = `Generation Error: ${err.message}`;
       }
     });
   </script>
