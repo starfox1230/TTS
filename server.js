@@ -5,23 +5,17 @@ import dotenv from 'dotenv';
 import fs from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
-import { spawn, execSync } from 'child_process';
-import OpenAI from 'openai';  // <-- SDK v4 import
+import { spawn } from 'child_process';
+import OpenAI from 'openai';  // SDK v4 import
 
 dotenv.config();
 
-// Instantiate the OpenAI client
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-app.use(
-  cors({
-    origin: '*',
-    methods: ['GET', 'POST'],
-  })
-);
+// Enable CORS & JSON parsing
+app.use(cors({ origin: '*', methods: ['GET','POST'] }));
 app.use(express.json());
 
 // In-memory store for requests
@@ -29,42 +23,44 @@ const requests = new Map();
 
 /**
  * 1. POST /initiate-audio-generation
- *    - Accepts { title, text, voice, model } and returns { requestId }
+ *    Accepts { title, text, voice, model, instructions }
+ *    Returns { requestId }
  */
 app.post('/initiate-audio-generation', (req, res) => {
-  const { title, text, voice, model } = req.body;
+  const { title, text, voice, model, instructions } = req.body;
   if (!title || !text) {
     return res.status(400).json({ error: 'Title and text are required.' });
   }
 
   const requestId = Date.now().toString() + Math.random().toString(36).substring(2);
-  requests.set(requestId, { title, text, voice, model });
+  requests.set(requestId, { title, text, voice, model, instructions });
   res.json({ requestId });
 });
 
 /**
  * 2. GET /generate-audio-stream?requestId=...
- *    - Splits text, calls OpenAI TTS per chunk via SDK, concatenates with FFmpeg,
- *      and streams status + final base64 audio via SSE.
+ *    Streams status updates and final base64 MP3 via SSE.
  */
 app.get('/generate-audio-stream', async (req, res) => {
   const { requestId } = req.query;
   if (!requestId) {
     res.writeHead(400, { 'Content-Type': 'text/event-stream' });
-    res.write('data: {"error": "requestId parameter is required."}\n\n');
+    res.write('data: {"error":"requestId parameter is required."}\n\n');
     return res.end();
   }
 
-  const storedData = requests.get(requestId);
-  if (!storedData) {
+  const stored = requests.get(requestId);
+  if (!stored) {
     res.writeHead(404, { 'Content-Type': 'text/event-stream' });
-    res.write('data: {"error": "No data found for the given requestId."}\n\n');
+    res.write('data: {"error":"No data found for the given requestId."}\n\n');
     return res.end();
   }
+  // Remove from map so it can't be reused
   requests.delete(requestId);
 
-  const { title, text, voice, model } = storedData;
+  const { title, text, voice, model, instructions } = stored;
 
+  // Setup SSE headers
   res.set({
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
@@ -73,101 +69,102 @@ app.get('/generate-audio-stream', async (req, res) => {
   res.flushHeaders();
 
   try {
-    // 1) Chunk the text at ~4000 chars, breaking at punctuation when possible
+    // 1) Split text into ~4k-character chunks
     res.write(`data: {"status":"Splitting text into chunks..."}\n\n`);
     const chunkSize = 4000;
     const chunks = [];
-    for (let start = 0; start < text.length; ) {
-      let end = Math.min(start + chunkSize, text.length);
+    for (let i = 0; i < text.length; ) {
+      let end = Math.min(i + chunkSize, text.length);
       if (end < text.length) {
         const pi = text.lastIndexOf('.', end);
-        if (pi > start) end = pi + 1;
+        if (pi > i) end = pi + 1;
       }
-      chunks.push(text.slice(start, end));
-      start = end;
+      chunks.push(text.slice(i, end));
+      i = end;
     }
 
-    // 2) Generate audio chunk-by-chunk
+    // 2) Generate TTS for each chunk
     const tempFiles = [];
-    for (let i = 0; i < chunks.length; i++) {
-      res.write(`data: {"status":"Generating audio for chunk ${i + 1} of ${chunks.length}"}\n\n`);
+    const ttsModel = model || 'gpt-4o-mini-tts';
+    for (let idx = 0; idx < chunks.length; idx++) {
+      res.write(
+        `data: {"status":"Generating chunk ${idx + 1} of ${chunks.length}..."}\n\n`
+      );
 
-      const ttsModel = model || 'gpt-4o-mini-tts';
-      const mp3Response = await openai.audio.speech.create({
+      // Build the create parameters, conditionally including instructions
+      const params = {
         model: ttsModel,
         voice: voice || 'alloy',
-        input: chunks[i],
+        input: chunks[idx],
         response_format: 'mp3'
-      });
+      };
+      if (instructions && instructions.trim()) {
+        params.instructions = instructions.trim();
+      }
 
-      // Convert streamed MP3 to Buffer
+      // Call the OpenAI TTS endpoint
+      const mp3Response = await openai.audio.speech.create(params);
       const arrayBuffer = await mp3Response.arrayBuffer();
       const buffer = Buffer.from(arrayBuffer);
-      const tempPath = path.join(tmpdir(), `chunk_${i}.mp3`);
+
+      // Write out a temporary MP3 file
+      const tempPath = path.join(tmpdir(), `chunk_${idx}.mp3`);
       fs.writeFileSync(tempPath, buffer);
       tempFiles.push(tempPath);
     }
 
-    // 3) Concatenate MP3 chunks with FFmpeg
-    res.write(`data: {"status":"Concatenating audio files..."}\n\n`);
-    const fileListPath = path.join(tmpdir(), 'filelist.txt');
-    fs.writeFileSync(fileListPath, tempFiles.map(f => `file '${f}'`).join('\n'));
+    // 3) Concatenate via FFmpeg
+    res.write(`data: {"status":"Concatenating audio chunks..."}\n\n`);
+    const listFile = path.join(tmpdir(), 'filelist.txt');
+    fs.writeFileSync(
+      listFile,
+      tempFiles.map(f => `file '${f}'`).join('\n')
+    );
+    const outPath = path.join(tmpdir(), `full_${Date.now()}.mp3`);
 
-    const concatenatedPath = path.join(tmpdir(), `concatenated_${Date.now()}.mp3`);
     await new Promise((resolve, reject) => {
-      const proc = spawn('ffmpeg', [
-        '-f','concat','-safe','0','-i',fileListPath,'-c','copy',concatenatedPath
+      const ff = spawn('ffmpeg', [
+        '-f','concat','-safe','0','-i', listFile,
+        '-c','copy', outPath
       ]);
-      proc.stderr.on('data', d => console.error(`ffmpeg: ${d}`));
-      proc.on('close', code => code===0 ? resolve() : reject(new Error(`ffmpeg ${code}`)));
+      ff.stderr.on('data', d => console.error('ffmpeg:', d.toString()));
+      ff.on('close', code => (code === 0 ? resolve() : reject(new Error(`ffmpeg exited ${code}`))));
     });
 
-    const finalBuffer = fs.readFileSync(concatenatedPath);
+    // Read final MP3, convert to base64
+    const finalBuffer = fs.readFileSync(outPath);
     const base64Audio = finalBuffer.toString('base64');
 
-    // Cleanup
+    // Cleanup temp files
     tempFiles.forEach(f => fs.unlinkSync(f));
-    fs.unlinkSync(fileListPath);
-    fs.unlinkSync(concatenatedPath);
+    fs.unlinkSync(listFile);
+    fs.unlinkSync(outPath);
 
-    // 4) Send final audio
+    // 4) Send back the audio
     res.write(`data: {"status":"Audio generated successfully."}\n\n`);
-    res.write(`data: {"title":"${title}","audioBase64":"${base64Audio}"}\n\n`);
+    res.write(
+      `data: {"title":"${title}","audioBase64":"${base64Audio}"}\n\n`
+    );
     res.end();
 
   } catch (err) {
     console.error('Error generating audio:', err);
     res.write(`data: {"error":"Failed to generate audio."}\n\n`);
-    return res.end();
+    res.end();
   }
 });
 
 /**
  * 3. POST /generate-audio
- *    - Non-SSE version for smaller texts
+ *    Non-SSE fallback (not chunked)—implementation omitted for brevity
  */
 app.post('/generate-audio', async (req, res) => {
-  try {
-    const { title, text, voice, model } = req.body;
-    if (!title || !text) {
-      return res.status(400).json({ error: 'Title and text are required.' });
-    }
-
-    // Same chunking logic...
-    // (omitted for brevity; implement as above)
-
-    res.status(200).json({
-      message: 'Audio generated successfully.',
-      title,
-      audioBase64: finalBase64  // from concatenation above
-    });
-  } catch (error) {
-    console.error('Error generating audio:', error);
-    res.status(500).json({ error: 'Failed to generate audio.' });
-  }
+  res.status(501).json({ error: 'Not implemented in this demo.' });
 });
 
 // Root health check
 app.get('/', (req, res) => res.send('TTS API is ready.'));
 
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
