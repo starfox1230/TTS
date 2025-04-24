@@ -41,9 +41,7 @@
       color: #90caf9;
       text-decoration: none;
     }
-    .audio-item a:hover {
-      text-decoration: underline;
-    }
+    .audio-item a:hover { text-decoration: underline; }
     #statusMessages {
       margin-top: 10px;
       font-size: 1em;
@@ -61,6 +59,20 @@
       margin-bottom: 20px;
       text-align: center;
     }
+    #advancedOptions {
+      display: none;
+      margin-top: 10px;
+    }
+    #advancedToggleLabel {
+      display: none;
+      margin-top: 10px;
+      font-size: 0.95em;
+    }
+    #advancedToggleLabel input {
+      width: auto;
+      margin-right: 8px;
+      vertical-align: middle;
+    }
   </style>
 </head>
 <body>
@@ -74,7 +86,7 @@
 
     <label for="model">Choose TTS Model:</label>
     <select id="model">
-      <option value="gpt-4o-mini-tts" selected>GPT‑4o Mini TTS (new)</option>
+      <option value="gpt-4o-mini-tts" selected>GPT-4o Mini TTS (new)</option>
       <option value="tts-1">Standard TTS (old)</option>
     </select>
 
@@ -93,6 +105,19 @@
       <option value="verse">Verse</option>
     </select>
 
+    <label id="advancedToggleLabel">
+      <input type="checkbox" id="showAdvanced">
+      Show advanced options
+    </label>
+    <div id="advancedOptions">
+      <label for="customInstr">Free-form Custom Instructions:</label>
+      <textarea
+        id="customInstr"
+        rows="3"
+        placeholder="e.g., Speak with a British accent and cheerful tone…"
+      ></textarea>
+    </div>
+
     <button id="generateBtn">Generate Audio</button>
     
     <div id="statusMessages"></div>
@@ -100,26 +125,30 @@
   </div>
 
   <script>
-    const API_BASE      = 'https://tts-jeh9.onrender.com';
-    const warmUpMessage = document.getElementById('warmUpMessage');
-    const titleInput    = document.getElementById('title');
-    const textInput     = document.getElementById('text');
-    const modelSelect   = document.getElementById('model');
-    const voiceSelect   = document.getElementById('voice');
-    const charCountDiv  = document.getElementById('charCount');
-    const generateBtn   = document.getElementById('generateBtn');
-    const statusDiv     = document.getElementById('statusMessages');
-    const audioList     = document.getElementById('audioList');
+    const API_BASE        = 'https://tts-jeh9.onrender.com';
+    const warmUpMessage   = document.getElementById('warmUpMessage');
+    const titleInput      = document.getElementById('title');
+    const textInput       = document.getElementById('text');
+    const modelSelect     = document.getElementById('model');
+    const voiceSelect     = document.getElementById('voice');
+    const charCountDiv    = document.getElementById('charCount');
+    const generateBtn     = document.getElementById('generateBtn');
+    const statusDiv       = document.getElementById('statusMessages');
+    const audioList       = document.getElementById('audioList');
+    const showAdvanced    = document.getElementById('showAdvanced');
+    const advancedOptions = document.getElementById('advancedOptions');
+    const customInstr     = document.getElementById('customInstr');
+    const advancedToggle  = document.getElementById('advancedToggleLabel');
 
     // Constants for cost calculation
-    const charsPerMinute = 920;  // observed average
+    const charsPerMinute = 920;
     const charRates = {
-      'gpt-4o-mini-tts': 0.0006,  // $0.60 per 1M chars => $0.0006 per 1K
-      'tts-1':           0.015    // $15.00 per 1M chars => $0.015 per 1K
+      'gpt-4o-mini-tts': 0.0006,
+      'tts-1':           0.015
     };
-    const audioRatePerMin = 0.015; // $0.015 per minute of audio
+    const audioRatePerMin = 0.015;
 
-    // Map of voices supported by each model
+    // Voices per model
     const voicesByModel = {
       'tts-1': [
         'alloy','echo','fable','onyx','nova','shimmer'
@@ -130,28 +159,44 @@
       ]
     };
 
-    // 1) Filter voice options whenever model changes
+    // 1) Filter voices & toggle advanced UI on model change
     modelSelect.addEventListener('change', () => {
-      const valid = voicesByModel[modelSelect.value] || [];
+      const model = modelSelect.value;
+      const valid = voicesByModel[model] || [];
+      // voice filtering
       voiceSelect.querySelectorAll('option').forEach(opt => {
         opt.disabled = !valid.includes(opt.value);
       });
+      // show/hide advanced toggle
+      if (model === 'gpt-4o-mini-tts') {
+        advancedToggle.style.display = 'block';
+      } else {
+        advancedToggle.style.display = 'none';
+        showAdvanced.checked = false;
+        advancedOptions.style.display = 'none';
+        customInstr.value = '';
+      }
     });
-    // Trigger once on load to enforce initial default
+    // trigger once on load
     modelSelect.dispatchEvent(new Event('change'));
 
-    // 2) Warm‑up server on page load
+    // 1a) Toggle the advanced panel
+    showAdvanced.addEventListener('change', () => {
+      advancedOptions.style.display = showAdvanced.checked ? 'block' : 'none';
+    });
+
+    // 2) Warm-up server
     window.addEventListener('load', async () => {
       try {
         await fetch(`${API_BASE}/`);
         warmUpMessage.innerText = 'Server is ready!';
         setTimeout(() => warmUpMessage.style.display = 'none', 2000);
-      } catch (e) {
+      } catch {
         warmUpMessage.innerText = 'Error contacting server.';
       }
     });
 
-    // 3) Character & cost estimator (text + audio)
+    // 3) Cost estimator
     textInput.addEventListener('input', function() {
       const len       = this.value.length;
       const rate      = charRates[modelSelect.value] || 0;
@@ -159,37 +204,35 @@
       const minutes   = len / charsPerMinute;
       const audioCost = minutes * audioRatePerMin;
       const totalCost = textCost + audioCost;
-
       charCountDiv.innerText =
         `Chars: ${len} | Text: $${textCost.toFixed(3)} + ` +
         `Audio: $${audioCost.toFixed(3)} = $${totalCost.toFixed(3)}`;
     });
 
-    // 4) Generate button handler
+    // 4) Generate button
     generateBtn.addEventListener('click', async () => {
       statusDiv.innerText = '';
       audioList.innerHTML = '';
 
-      const title = titleInput.value.trim() || 'Untitled';
-      const text  = textInput.value;
-      const voice = voiceSelect.value;
-      const model = modelSelect.value;
+      const title        = titleInput.value.trim() || 'Untitled';
+      const text         = textInput.value;
+      const voice        = voiceSelect.value;
+      const model        = modelSelect.value;
+      const instructions = customInstr.value.trim();
 
       try {
-        // Initiate request
         const initRes = await fetch(
           `${API_BASE}/initiate-audio-generation`,
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ title, text, voice, model })
+            body: JSON.stringify({ title, text, voice, model, instructions })
           }
         );
         if (!initRes.ok) throw new Error(`Initiation failed: ${initRes.statusText}`);
         const { requestId } = await initRes.json();
         if (!requestId) throw new Error('No requestId returned.');
 
-        // Open SSE for streaming updates
         const es = new EventSource(
           `${API_BASE}/generate-audio-stream?requestId=${encodeURIComponent(requestId)}`
         );
@@ -202,32 +245,27 @@
             es.close();
           } else if (data.audioBase64 && data.title) {
             statusDiv.innerText = 'Process complete.';
-            const binary = atob(data.audioBase64);
-            const arr    = new Uint8Array(binary.length);
-            for (let i = 0; i < binary.length; i++) {
-              arr[i] = binary.charCodeAt(i);
-            }
-            const blobUrl = URL.createObjectURL(new Blob([arr], { type: 'audio/mpeg' }));
+            const bin = atob(data.audioBase64);
+            const arr = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+            const url = URL.createObjectURL(new Blob([arr], { type: 'audio/mpeg' }));
             const item = document.createElement('div');
             item.className = 'audio-item';
             item.innerHTML = `
               <h3>${data.title}</h3>
-              <audio controls src="${blobUrl}"></audio><br/>
-              <a href="${blobUrl}" download="${data.title}.mp3">
+              <audio controls src="${url}"></audio><br/>
+              <a href="${url}" download="${data.title}.mp3">
                 Download ${data.title}.mp3
-              </a>
-            `;
+              </a>`;
             audioList.prepend(item);
             es.close();
           }
         };
-        es.onerror = (err) => {
-          console.error('SSE Error:', err);
+        es.onerror = () => {
           statusDiv.innerText = 'Error receiving updates.';
           es.close();
         };
       } catch (err) {
-        console.error('Generation Error:', err);
         statusDiv.innerText = `Generation Error: ${err.message}`;
       }
     });
