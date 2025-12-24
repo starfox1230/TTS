@@ -79,16 +79,26 @@
       <div class="row">
         <div>
           <label for="chunkSize">Chunk size (chars):</label>
-          <input type="number" id="chunkSize" min="500" max="6000" value="2500">
+          <input type="number" id="chunkSize" min="500" max="6000" value="4000">
         </div>
         <div>
           <label for="concurrency">Concurrency (parallel chunks):</label>
           <select id="concurrency">
             <option value="1">1 (safest)</option>
             <option value="2">2</option>
-            <option value="3" selected>3 (recommended)</option>
+            <option value="3">3</option>
             <option value="4">4</option>
-            <option value="5">5 (aggressive)</option>
+            <option value="5">5</option>
+            <option value="6">6</option>
+            <option value="7">7</option>
+            <option value="8">8</option>
+            <option value="9">9</option>
+            <option value="10">10</option>
+            <option value="11">11</option>
+            <option value="12">12</option>
+            <option value="13">13</option>
+            <option value="14">14</option>
+            <option value="15" selected>15 (max)</option>
           </select>
         </div>
       </div>
@@ -230,23 +240,71 @@
       return chunks;
     }
 
-    // Concurrency pool
-    async function runPool(items, workerFn, concurrency, signal) {
-      let idx = 0;
-      const results = new Array(items.length);
+    // Concurrency pool with adaptive drop on errors
+    async function runPoolAdaptive(items, workerFn, concurrencyStart, signal, onDrop) {
+      let nextIndex = 0;
+      let inFlight = 0;
+      let max = Math.max(1, Math.floor(concurrencyStart));
 
-      async function runner() {
-        while (idx < items.length) {
-          if (signal?.aborted) throw new Error("Cancelled");
-          const my = idx++;
-          results[my] = await workerFn(items[my], my);
+      function setMax(newMax) {
+        const clamped = Math.max(1, Math.floor(newMax));
+        if (clamped < max) {
+          max = clamped;
+          onDrop?.(max);
         }
       }
 
-      const workers = [];
-      for (let i = 0; i < concurrency; i++) workers.push(runner());
-      await Promise.all(workers);
-      return results;
+      // Error-based auto-drop policy:
+      // - Drop faster on 429 (rate limiting)
+      // - Drop modestly on network/failed fetch/timeouts
+      let recentFails = 0;
+
+      function maybeDrop(errMsg) {
+        recentFails++;
+
+        const msg = String(errMsg || "");
+        const is429 = /(^|[^0-9])429([^0-9]|$)|too many requests/i.test(msg);
+        const isNet = /failed fetch|network|timeout|fetch|connection|socket|ECONN|ETIMEDOUT/i.test(msg);
+
+        if (is429 && recentFails >= 2) {
+          // Drop ~40%, but never below 3 unless already lower
+          setMax(max <= 3 ? 3 : Math.max(3, Math.ceil(max * 0.6)));
+          recentFails = 0;
+        } else if (isNet && recentFails >= 3) {
+          // Drop ~25%, but never below 3 unless already lower
+          setMax(max <= 3 ? 3 : Math.max(3, Math.ceil(max * 0.75)));
+          recentFails = 0;
+        }
+      }
+
+      return new Promise((resolve, reject) => {
+        const results = new Array(items.length);
+
+        const pump = () => {
+          if (signal?.aborted) return reject(new Error("Cancelled"));
+          if (nextIndex >= items.length && inFlight === 0) return resolve(results);
+
+          while (inFlight < max && nextIndex < items.length) {
+            const my = nextIndex++;
+            inFlight++;
+
+            Promise.resolve(workerFn(items[my], my))
+              .then((r) => { results[my] = r; })
+              .catch((e) => {
+                const msg = e?.message || String(e);
+                maybeDrop(msg);
+                // NOTE: workerFn should already set per-chunk status to fail/run/etc.
+                // We do NOT reject; we keep processing remaining items.
+              })
+              .finally(() => {
+                inFlight--;
+                pump();
+              });
+          }
+        };
+
+        pump();
+      });
     }
 
     // UI helpers
@@ -385,37 +443,43 @@
 
       const items = state.chunks.map((c, idx) => ({ idx, text: c.text }));
 
-      await runPool(items, async (item) => {
-        const i = item.idx;
-        const key = `${state.jobKey}:${pad3(i)}`;
+      await runPoolAdaptive(
+        items,
+        async (item) => {
+          const i = item.idx;
+          const key = `${state.jobKey}:${pad3(i)}`;
 
-        // already have it?
-        const existing = await idbGet(key);
-        if (existing?.blob) {
-          state.chunks[i].status = "ok";
-          done++;
+          // already have it?
+          const existing = await idbGet(key);
+          if (existing?.blob) {
+            state.chunks[i].status = "ok";
+            done++;
+            setStatus(`Generating… (${done}/${total} complete)`);
+            renderChunkRows(state);
+            return;
+          }
+
+          state.chunks[i].status = "run";
+          state.chunks[i].error = "";
+          renderChunkRows(state);
+
+          try {
+            const blob = await fetchChunkAudio({ text: item.text, model, voice, instructions }, controller.signal);
+            await idbPut(key, blob, { jobKey: state.jobKey, index: i, title: state.title });
+            state.chunks[i].status = "ok";
+            done++;
+          } catch (e) {
+            state.chunks[i].status = "fail";
+            state.chunks[i].error = e.message || String(e);
+          }
+
           setStatus(`Generating… (${done}/${total} complete)`);
           renderChunkRows(state);
-          return;
-        }
-
-        state.chunks[i].status = "run";
-        state.chunks[i].error = "";
-        renderChunkRows(state);
-
-        try {
-          const blob = await fetchChunkAudio({ text: item.text, model, voice, instructions }, controller.signal);
-          await idbPut(key, blob, { jobKey: state.jobKey, index: i, title: state.title });
-          state.chunks[i].status = "ok";
-          done++;
-        } catch (e) {
-          state.chunks[i].status = "fail";
-          state.chunks[i].error = e.message || String(e);
-        }
-
-        setStatus(`Generating… (${done}/${total} complete)`);
-        renderChunkRows(state);
-      }, concurrency, controller.signal);
+        },
+        concurrency,
+        controller.signal,
+        (newMax) => setStatus(`Auto-drop: reducing concurrency to ${newMax} due to errors…`)
+      );
 
       state.running = false;
       setButtons(false);
@@ -479,22 +543,28 @@
       setStatus(`Retrying ${failedIdx.length} failed chunk(s)…`);
       renderChunkRows(state);
 
-      await runPool(failedIdx, async (i) => {
-        const key = `${state.jobKey}:${pad3(i)}`;
-        state.chunks[i].status = "run";
-        state.chunks[i].error = "";
-        renderChunkRows(state);
+      await runPoolAdaptive(
+        failedIdx,
+        async (i) => {
+          const key = `${state.jobKey}:${pad3(i)}`;
+          state.chunks[i].status = "run";
+          state.chunks[i].error = "";
+          renderChunkRows(state);
 
-        try {
-          const blob = await fetchChunkAudio({ text: state.chunks[i].text, model, voice, instructions }, controller.signal);
-          await idbPut(key, blob, { jobKey: state.jobKey, index: i, title: state.title });
-          state.chunks[i].status = "ok";
-        } catch (e) {
-          state.chunks[i].status = "fail";
-          state.chunks[i].error = e.message || String(e);
-        }
-        renderChunkRows(state);
-      }, concurrency, controller.signal);
+          try {
+            const blob = await fetchChunkAudio({ text: state.chunks[i].text, model, voice, instructions }, controller.signal);
+            await idbPut(key, blob, { jobKey: state.jobKey, index: i, title: state.title });
+            state.chunks[i].status = "ok";
+          } catch (e) {
+            state.chunks[i].status = "fail";
+            state.chunks[i].error = e.message || String(e);
+          }
+          renderChunkRows(state);
+        },
+        concurrency,
+        controller.signal,
+        (newMax) => setStatus(`Auto-drop: reducing concurrency to ${newMax} due to errors…`)
+      );
 
       state.running = false;
       setButtons(false);
