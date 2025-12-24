@@ -79,7 +79,7 @@
       <div class="row">
         <div>
           <label for="chunkSize">Chunk size (chars):</label>
-          <input type="number" id="chunkSize" min="500" max="6000" value="4000">
+          <input type="number" id="chunkSize" min="500" max="6000" value="2500">
         </div>
         <div>
           <label for="concurrency">Concurrency (parallel chunks):</label>
@@ -98,7 +98,22 @@
             <option value="12">12</option>
             <option value="13">13</option>
             <option value="14">14</option>
-            <option value="15" selected>15 (max)</option>
+            <option value="15">15</option>
+            <option value="16">16</option>
+            <option value="17">17</option>
+            <option value="18">18</option>
+            <option value="19">19</option>
+            <option value="20">20</option>
+            <option value="21">21</option>
+            <option value="22">22</option>
+            <option value="23">23</option>
+            <option value="24">24</option>
+            <option value="25">25</option>
+            <option value="26">26</option>
+            <option value="27">27</option>
+            <option value="28">28</option>
+            <option value="29">29</option>
+            <option value="30" selected>30 (max)</option>
           </select>
         </div>
       </div>
@@ -116,9 +131,9 @@
     </div>
 
     <div id="statusMessages"></div>
-    <div class="chunkList" id="chunkList"></div>
-
     <div id="audioList"></div>
+
+    <div class="chunkList" id="chunkList"></div>
   </div>
 
   <script>
@@ -148,6 +163,9 @@
     const advancedToggle = document.getElementById("advancedToggleLabel");
     const chunkSizeInput = document.getElementById("chunkSize");
     const concurrencySelect = document.getElementById("concurrency");
+
+    const LS_ADVANCED_SETTINGS = "tts_advanced_settings";
+    const LS_ADVANCED_OPEN = "tts_advanced_open";
 
     // Cost estimator constants (your existing logic)
     const charsPerMinute = 920;
@@ -352,6 +370,51 @@
       });
     }
 
+    function saveAdvancedSettings() {
+      const settings = {
+        chunkSize: chunkSizeInput.value,
+        concurrency: concurrencySelect.value,
+        instructions: customInstr.value,
+      };
+      localStorage.setItem(LS_ADVANCED_SETTINGS, JSON.stringify(settings));
+    }
+
+    function loadAdvancedSettings() {
+      const raw = localStorage.getItem(LS_ADVANCED_SETTINGS);
+      if (raw) {
+        try {
+          const saved = JSON.parse(raw);
+          if (saved.chunkSize) chunkSizeInput.value = saved.chunkSize;
+          if (saved.concurrency && concurrencySelect.querySelector(`option[value="${saved.concurrency}"]`)) {
+            concurrencySelect.value = saved.concurrency;
+          }
+          if (typeof saved.instructions === "string") customInstr.value = saved.instructions;
+        } catch {}
+      }
+
+      const savedOpen = localStorage.getItem(LS_ADVANCED_OPEN);
+      if (savedOpen !== null) {
+        showAdvanced.checked = savedOpen === "true";
+      }
+    }
+
+    function handleAdvancedToggleVisibility(model) {
+      const advancedAllowed = model === "gpt-4o-mini-tts";
+      advancedToggle.style.display = advancedAllowed ? "block" : "none";
+
+      if (!advancedAllowed) {
+        showAdvanced.checked = false;
+        advancedOptions.style.display = "none";
+        return;
+      }
+
+      const savedOpen = localStorage.getItem(LS_ADVANCED_OPEN);
+      if (savedOpen !== null) {
+        showAdvanced.checked = savedOpen === "true";
+      }
+      advancedOptions.style.display = showAdvanced.checked ? "block" : "none";
+    }
+
     // Model change -> voice filtering + advanced toggle
     modelSelect.addEventListener("change", () => {
       const model = modelSelect.value;
@@ -359,22 +422,24 @@
       voiceSelect.querySelectorAll("option").forEach(opt => {
         opt.disabled = !valid.includes(opt.value);
       });
-      if (model === "gpt-4o-mini-tts") {
-        advancedToggle.style.display = "block";
-      } else {
-        advancedToggle.style.display = "none";
-        showAdvanced.checked = false;
-        advancedOptions.style.display = "none";
-        customInstr.value = "";
-      }
+
+      handleAdvancedToggleVisibility(model);
+
       // update estimator
       textInput.dispatchEvent(new Event("input"));
     });
+
+    loadAdvancedSettings();
     modelSelect.dispatchEvent(new Event("change"));
 
     showAdvanced.addEventListener("change", () => {
       advancedOptions.style.display = showAdvanced.checked ? "block" : "none";
+      localStorage.setItem(LS_ADVANCED_OPEN, showAdvanced.checked ? "true" : "false");
     });
+
+    customInstr.addEventListener("input", saveAdvancedSettings);
+    chunkSizeInput.addEventListener("input", saveAdvancedSettings);
+    concurrencySelect.addEventListener("change", saveAdvancedSettings);
 
     // Warm-up
     window.addEventListener("load", async () => {
@@ -586,6 +651,8 @@
       const voice = voiceSelect.value;
       const instructions = customInstr.value.trim();
       const chunkSize = Math.max(500, Math.min(6000, parseInt(chunkSizeInput.value, 10) || 2500));
+
+      saveAdvancedSettings();
 
       if (!text.trim()) {
         setStatus("Enter text first.");
