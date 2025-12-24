@@ -3,82 +3,42 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>TTS Two-Step Generator</title>
+  <title>TTS Chunked Generator</title>
   <style>
-    body {
-      background-color: #121212;
-      color: #e0e0e0;
-      font-family: Arial, sans-serif;
-      margin: 0;
-      padding: 20px;
-    }
-    .container { max-width: 800px; margin: auto; }
-    input, textarea, button, select {
-      width: 100%;
-      padding: 10px;
-      margin-top: 10px;
-      border: none;
-      border-radius: 4px;
-    }
-    input, textarea, select {
-      background: #1e1e1e;
-      color: #e0e0e0;
-    }
-    button {
-      background: #1e88e5;
-      color: #fff;
-      cursor: pointer;
-    }
+    body { background-color: #121212; color: #e0e0e0; font-family: Arial, sans-serif; margin: 0; padding: 20px; }
+    .container { max-width: 900px; margin: auto; }
+    input, textarea, button, select { width: 100%; padding: 10px; margin-top: 10px; border: none; border-radius: 4px; }
+    input, textarea, select { background: #1e1e1e; color: #e0e0e0; }
+    button { background: #1e88e5; color: #fff; cursor: pointer; }
     button:hover { background: #1565c0; }
-    .audio-item {
-      margin-top: 20px;
-      border: 1px solid #444;
-      padding: 10px;
-      border-radius: 4px;
-      background: #1e1e1e;
-    }
-    .audio-item a {
-      color: #90caf9;
-      text-decoration: none;
-    }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .row { display: flex; gap: 10px; }
+    .row > * { flex: 1; }
+    .audio-item { margin-top: 20px; border: 1px solid #444; padding: 10px; border-radius: 4px; background: #1e1e1e; }
+    .audio-item a { color: #90caf9; text-decoration: none; }
     .audio-item a:hover { text-decoration: underline; }
-    #statusMessages {
-      margin-top: 10px;
-      font-size: 1em;
-      color: #90caf9;
-    }
-    #charCount {
-      margin-top: 5px;
-      font-size: 0.9em;
-      color: #bbb;
-    }
-    #warmUpMessage {
-      background: #333;
-      padding: 10px;
-      border-radius: 4px;
-      margin-bottom: 20px;
-      text-align: center;
-    }
-    #advancedOptions {
-      display: none;
-      margin-top: 10px;
-    }
-    #advancedToggleLabel {
-      display: none;
-      margin-top: 10px;
-      font-size: 0.95em;
-    }
-    #advancedToggleLabel input {
-      width: auto;
-      margin-right: 8px;
-      vertical-align: middle;
-    }
+    #statusMessages { margin-top: 10px; font-size: 1em; color: #90caf9; white-space: pre-wrap; }
+    #charCount { margin-top: 5px; font-size: 0.9em; color: #bbb; }
+    #warmUpMessage { background: #333; padding: 10px; border-radius: 4px; margin-bottom: 20px; text-align: center; }
+    #advancedOptions { display: none; margin-top: 10px; }
+    #advancedToggleLabel { display: none; margin-top: 10px; font-size: 0.95em; }
+    #advancedToggleLabel input { width: auto; margin-right: 8px; vertical-align: middle; }
+    .chunkList { margin-top: 15px; }
+    .chunkRow { display:flex; align-items:center; gap:10px; padding:8px; border:1px solid #333; border-radius:6px; margin-top:8px; background:#181818;}
+    .chunkRow small { color:#aaa; }
+    .pill { padding:2px 8px; border-radius:999px; font-size:12px; background:#2a2a2a; color:#ddd; }
+    .pill.ok { background:#1b5e20; }
+    .pill.bad { background:#b71c1c; }
+    .pill.run { background:#0d47a1; }
   </style>
+
+  <!-- JSZip for “Download ZIP” -->
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 </head>
 <body>
   <div class="container">
     <div id="warmUpMessage">Warming up the server, please wait...</div>
-    <h1>TTS Two-Step Generator</h1>
+    <h1>TTS Chunked Generator</h1>
 
     <input type="text" id="title" placeholder="Enter title">
     <textarea id="text" rows="6" placeholder="Enter text here"></textarea>
@@ -103,172 +63,609 @@
       <option value="sage">Sage</option>
       <option value="shimmer">Shimmer</option>
       <option value="verse">Verse</option>
+      <option value="marin">Marin</option>
+      <option value="cedar">Cedar</option>
     </select>
 
     <label id="advancedToggleLabel">
       <input type="checkbox" id="showAdvanced">
       Show advanced options
     </label>
+
     <div id="advancedOptions">
       <label for="customInstr">Free-form Custom Instructions:</label>
-      <textarea
-        id="customInstr"
-        rows="3"
-        placeholder="e.g., Speak with a British accent and cheerful tone…"
-      ></textarea>
+      <textarea id="customInstr" rows="3" placeholder="e.g., Speak in a cheerful and positive tone…"></textarea>
+
+      <div class="row">
+        <div>
+          <label for="chunkSize">Chunk size (chars):</label>
+          <input type="number" id="chunkSize" min="500" max="6000" value="2500">
+        </div>
+        <div>
+          <label for="concurrency">Concurrency (parallel chunks):</label>
+          <select id="concurrency">
+            <option value="1">1 (safest)</option>
+            <option value="2">2</option>
+            <option value="3" selected>3 (recommended)</option>
+            <option value="4">4</option>
+            <option value="5">5 (aggressive)</option>
+          </select>
+        </div>
+      </div>
     </div>
 
-    <button id="generateBtn">Generate Audio</button>
-    
+    <div class="row">
+      <button id="generateBtn">Generate Audio</button>
+      <button id="retryBtn" disabled>Retry failed</button>
+      <button id="cancelBtn" disabled>Cancel</button>
+    </div>
+
+    <div class="row">
+      <button id="downloadZipBtn" disabled>Download completed chunks (ZIP)</button>
+      <button id="downloadFullBtn" disabled>Download full MP3 (concat)</button>
+    </div>
+
     <div id="statusMessages"></div>
+    <div class="chunkList" id="chunkList"></div>
+
     <div id="audioList"></div>
   </div>
 
   <script>
-    const API_BASE        = 'https://tts-jeh9.onrender.com';
-    const warmUpMessage   = document.getElementById('warmUpMessage');
-    const titleInput      = document.getElementById('title');
-    const textInput       = document.getElementById('text');
-    const modelSelect     = document.getElementById('model');
-    const voiceSelect     = document.getElementById('voice');
-    const charCountDiv    = document.getElementById('charCount');
-    const generateBtn     = document.getElementById('generateBtn');
-    const statusDiv       = document.getElementById('statusMessages');
-    const audioList       = document.getElementById('audioList');
-    const showAdvanced    = document.getElementById('showAdvanced');
-    const advancedOptions = document.getElementById('advancedOptions');
-    const customInstr     = document.getElementById('customInstr');
-    const advancedToggle  = document.getElementById('advancedToggleLabel');
+    const API_BASE = "https://tts-jeh9.onrender.com";
 
-    // Constants for cost calculation
+    const warmUpMessage = document.getElementById("warmUpMessage");
+    const titleInput = document.getElementById("title");
+    const textInput = document.getElementById("text");
+    const modelSelect = document.getElementById("model");
+    const voiceSelect = document.getElementById("voice");
+    const charCountDiv = document.getElementById("charCount");
+
+    const generateBtn = document.getElementById("generateBtn");
+    const retryBtn = document.getElementById("retryBtn");
+    const cancelBtn = document.getElementById("cancelBtn");
+
+    const downloadZipBtn = document.getElementById("downloadZipBtn");
+    const downloadFullBtn = document.getElementById("downloadFullBtn");
+
+    const statusDiv = document.getElementById("statusMessages");
+    const audioList = document.getElementById("audioList");
+    const chunkListEl = document.getElementById("chunkList");
+
+    const showAdvanced = document.getElementById("showAdvanced");
+    const advancedOptions = document.getElementById("advancedOptions");
+    const customInstr = document.getElementById("customInstr");
+    const advancedToggle = document.getElementById("advancedToggleLabel");
+    const chunkSizeInput = document.getElementById("chunkSize");
+    const concurrencySelect = document.getElementById("concurrency");
+
+    // Cost estimator constants (your existing logic)
     const charsPerMinute = 920;
-    const charRates = {
-      'gpt-4o-mini-tts': 0.0006,
-      'tts-1':           0.015
-    };
+    const charRates = { "gpt-4o-mini-tts": 0.0006, "tts-1": 0.015 };
     const audioRatePerMin = 0.015;
 
-    // Voices per model
     const voicesByModel = {
-      'tts-1': [
-        'alloy','echo','fable','onyx','nova','shimmer'
-      ],
-      'gpt-4o-mini-tts': [
-        'alloy','ash','ballad','coral','echo',
-        'fable','onyx','nova','sage','shimmer','verse'
-      ]
+      "tts-1": ["alloy","echo","fable","onyx","nova","shimmer"],
+      "gpt-4o-mini-tts": ["alloy","ash","ballad","coral","echo","fable","onyx","nova","sage","shimmer","verse","marin","cedar"]
     };
 
-    // 1) Filter voices & toggle advanced UI on model change
-    modelSelect.addEventListener('change', () => {
+    // IndexedDB (simple wrapper)
+    const DB_NAME = "tts_chunks_db";
+    const DB_STORE = "chunks";
+
+    function openDB() {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open(DB_NAME, 1);
+        req.onupgradeneeded = () => {
+          const db = req.result;
+          if (!db.objectStoreNames.contains(DB_STORE)) {
+            db.createObjectStore(DB_STORE, { keyPath: "key" });
+          }
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    async function idbPut(key, blob, meta) {
+      const db = await openDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(DB_STORE, "readwrite");
+        tx.objectStore(DB_STORE).put({ key, blob, meta, savedAt: Date.now() });
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+
+    async function idbGet(key) {
+      const db = await openDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(DB_STORE, "readonly");
+        const req = tx.objectStore(DB_STORE).get(key);
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    async function idbGetAllByPrefix(prefix) {
+      const db = await openDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(DB_STORE, "readonly");
+        const store = tx.objectStore(DB_STORE);
+        const out = [];
+        const cursorReq = store.openCursor();
+        cursorReq.onsuccess = () => {
+          const cur = cursorReq.result;
+          if (!cur) return resolve(out);
+          if (cur.key.startsWith(prefix)) out.push(cur.value);
+          cur.continue();
+        };
+        cursorReq.onerror = () => reject(cursorReq.error);
+      });
+    }
+
+    // Simple stable job key (so refresh/resume works for same inputs)
+    async function sha256(str) {
+      const data = new TextEncoder().encode(str);
+      const hash = await crypto.subtle.digest("SHA-256", data);
+      const bytes = Array.from(new Uint8Array(hash));
+      return bytes.map(b => b.toString(16).padStart(2, "0")).join("");
+    }
+
+    function setStatus(msg) { statusDiv.innerText = msg; }
+
+    function pad3(n) { return String(n).padStart(3, "0"); }
+
+    function splitIntoChunks(text, chunkSize) {
+      const chunks = [];
+      for (let i = 0; i < text.length; ) {
+        let end = Math.min(i + chunkSize, text.length);
+        if (end < text.length) {
+          const pi = text.lastIndexOf(".", end);
+          if (pi > i) end = pi + 1;
+        }
+        chunks.push(text.slice(i, end));
+        i = end;
+      }
+      return chunks;
+    }
+
+    // Concurrency pool
+    async function runPool(items, workerFn, concurrency, signal) {
+      let idx = 0;
+      const results = new Array(items.length);
+
+      async function runner() {
+        while (idx < items.length) {
+          if (signal?.aborted) throw new Error("Cancelled");
+          const my = idx++;
+          results[my] = await workerFn(items[my], my);
+        }
+      }
+
+      const workers = [];
+      for (let i = 0; i < concurrency; i++) workers.push(runner());
+      await Promise.all(workers);
+      return results;
+    }
+
+    // UI helpers
+    function renderChunkRows(state) {
+      chunkListEl.innerHTML = "";
+      state.chunks.forEach((c, i) => {
+        const row = document.createElement("div");
+        row.className = "chunkRow";
+        const pill = document.createElement("span");
+        pill.className = "pill " + (c.status === "ok" ? "ok" : c.status === "fail" ? "bad" : c.status === "run" ? "run" : "");
+        pill.textContent = c.status.toUpperCase();
+        row.appendChild(pill);
+
+        const main = document.createElement("div");
+        main.style.flex = "1";
+        main.innerHTML = `<div>Chunk ${i+1} / ${state.chunks.length} <small>(${c.len} chars)</small></div>
+                          <small>${c.error ? ("Error: " + c.error) : ""}</small>`;
+        row.appendChild(main);
+
+        const btn = document.createElement("button");
+        btn.textContent = "Retry";
+        btn.style.width = "120px";
+        btn.disabled = c.status !== "fail" || state.running;
+        btn.onclick = async () => { await retrySpecificChunk(state, i); };
+        row.appendChild(btn);
+
+        const dl = document.createElement("button");
+        dl.textContent = "Download";
+        dl.style.width = "120px";
+        dl.disabled = c.status !== "ok";
+        dl.onclick = async () => {
+          const key = `${state.jobKey}:${pad3(i)}`;
+          const rec = await idbGet(key);
+          if (!rec?.blob) return;
+          const url = URL.createObjectURL(rec.blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = `${state.title}_chunk_${pad3(i)}.mp3`;
+          a.click();
+          setTimeout(() => URL.revokeObjectURL(url), 2000);
+        };
+        row.appendChild(dl);
+
+        chunkListEl.appendChild(row);
+      });
+    }
+
+    // Model change -> voice filtering + advanced toggle
+    modelSelect.addEventListener("change", () => {
       const model = modelSelect.value;
       const valid = voicesByModel[model] || [];
-      // voice filtering
-      voiceSelect.querySelectorAll('option').forEach(opt => {
+      voiceSelect.querySelectorAll("option").forEach(opt => {
         opt.disabled = !valid.includes(opt.value);
       });
-      // show/hide advanced toggle
-      if (model === 'gpt-4o-mini-tts') {
-        advancedToggle.style.display = 'block';
+      if (model === "gpt-4o-mini-tts") {
+        advancedToggle.style.display = "block";
       } else {
-        advancedToggle.style.display = 'none';
+        advancedToggle.style.display = "none";
         showAdvanced.checked = false;
-        advancedOptions.style.display = 'none';
-        customInstr.value = '';
+        advancedOptions.style.display = "none";
+        customInstr.value = "";
       }
+      // update estimator
+      textInput.dispatchEvent(new Event("input"));
     });
-    // trigger once on load
-    modelSelect.dispatchEvent(new Event('change'));
+    modelSelect.dispatchEvent(new Event("change"));
 
-    // 1a) Toggle the advanced panel
-    showAdvanced.addEventListener('change', () => {
-      advancedOptions.style.display = showAdvanced.checked ? 'block' : 'none';
+    showAdvanced.addEventListener("change", () => {
+      advancedOptions.style.display = showAdvanced.checked ? "block" : "none";
     });
 
-    // 2) Warm-up server
-    window.addEventListener('load', async () => {
+    // Warm-up
+    window.addEventListener("load", async () => {
       try {
         await fetch(`${API_BASE}/`);
-        warmUpMessage.innerText = 'Server is ready!';
-        setTimeout(() => warmUpMessage.style.display = 'none', 2000);
+        warmUpMessage.innerText = "Server is ready!";
+        setTimeout(() => warmUpMessage.style.display = "none", 2000);
       } catch {
-        warmUpMessage.innerText = 'Error contacting server.';
+        warmUpMessage.innerText = "Error contacting server.";
       }
     });
 
-    // 3) Cost estimator
-    textInput.addEventListener('input', function() {
-      const len       = this.value.length;
-      const rate      = charRates[modelSelect.value] || 0;
-      const textCost  = (len / 1000) * rate;
-      const minutes   = len / charsPerMinute;
+    // Cost estimator
+    textInput.addEventListener("input", function () {
+      const len = this.value.length;
+      const rate = charRates[modelSelect.value] || 0;
+      const textCost = (len / 1000) * rate;
+      const minutes = len / charsPerMinute;
       const audioCost = minutes * audioRatePerMin;
       const totalCost = textCost + audioCost;
       charCountDiv.innerText =
-        `Chars: ${len} | Text: $${textCost.toFixed(3)} + ` +
-        `Audio: $${audioCost.toFixed(3)} = $${totalCost.toFixed(3)}`;
+        `Chars: ${len} | Text: $${textCost.toFixed(3)} + Audio: $${audioCost.toFixed(3)} = $${totalCost.toFixed(3)}`;
     });
 
-    // 4) Generate button
-    generateBtn.addEventListener('click', async () => {
-      statusDiv.innerText = '';
-      audioList.innerHTML = '';
+    // Main state
+    let STATE = null;
+    let controller = null;
 
-      const title        = titleInput.value.trim() || 'Untitled';
-      const text         = textInput.value;
-      const voice        = voiceSelect.value;
-      const model        = modelSelect.value;
-      const instructions = customInstr.value.trim();
+    function setButtons(running) {
+      generateBtn.disabled = running;
+      cancelBtn.disabled = !running;
+      retryBtn.disabled = running || !STATE?.chunks?.some(c => c.status === "fail");
+      downloadZipBtn.disabled = running || !STATE?.chunks?.some(c => c.status === "ok");
+      downloadFullBtn.disabled = running || !STATE?.chunks?.every(c => c.status === "ok");
+    }
+
+    async function fetchChunkAudio({ text, model, voice, instructions }, signal) {
+      const res = await fetch(`${API_BASE}/tts-chunk`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, model, voice, instructions }),
+        signal
+      });
+
+      if (!res.ok) {
+        const maybe = await res.json().catch(() => null);
+        throw new Error(maybe?.error || `${res.status} ${res.statusText}`);
+      }
+
+      const buf = await res.arrayBuffer();
+      return new Blob([buf], { type: "audio/mpeg" });
+    }
+
+    async function generateAll(state) {
+      const concurrency = parseInt(concurrencySelect.value, 10) || 3;
+      const model = state.model, voice = state.voice, instructions = state.instructions;
+
+      state.running = true;
+      setButtons(true);
+      renderChunkRows(state);
+
+      const total = state.chunks.length;
+      let done = state.chunks.filter(c => c.status === "ok").length;
+
+      setStatus(`Generating… (${done}/${total} complete)`);
+
+      const items = state.chunks.map((c, idx) => ({ idx, text: c.text }));
+
+      await runPool(items, async (item) => {
+        const i = item.idx;
+        const key = `${state.jobKey}:${pad3(i)}`;
+
+        // already have it?
+        const existing = await idbGet(key);
+        if (existing?.blob) {
+          state.chunks[i].status = "ok";
+          done++;
+          setStatus(`Generating… (${done}/${total} complete)`);
+          renderChunkRows(state);
+          return;
+        }
+
+        state.chunks[i].status = "run";
+        state.chunks[i].error = "";
+        renderChunkRows(state);
+
+        try {
+          const blob = await fetchChunkAudio({ text: item.text, model, voice, instructions }, controller.signal);
+          await idbPut(key, blob, { jobKey: state.jobKey, index: i, title: state.title });
+          state.chunks[i].status = "ok";
+          done++;
+        } catch (e) {
+          state.chunks[i].status = "fail";
+          state.chunks[i].error = e.message || String(e);
+        }
+
+        setStatus(`Generating… (${done}/${total} complete)`);
+        renderChunkRows(state);
+      }, concurrency, controller.signal);
+
+      state.running = false;
+      setButtons(false);
+
+      const failed = state.chunks.filter(c => c.status === "fail").length;
+      if (failed) {
+        setStatus(`Done with errors. ${failed} chunk(s) failed. Use “Retry failed” or retry individual chunks.`);
+      } else {
+        setStatus(`All chunks complete. You can download ZIP or full MP3.`);
+      }
+      renderChunkRows(state);
+    }
+
+    async function retrySpecificChunk(state, chunkIndex) {
+      if (state.running) return;
+      controller = new AbortController();
+      state.running = true;
+      setButtons(true);
+
+      const model = state.model, voice = state.voice, instructions = state.instructions;
+      const key = `${state.jobKey}:${pad3(chunkIndex)}`;
+
+      state.chunks[chunkIndex].status = "run";
+      state.chunks[chunkIndex].error = "";
+      renderChunkRows(state);
+      setStatus(`Retrying chunk ${chunkIndex+1}/${state.chunks.length}…`);
 
       try {
-        const initRes = await fetch(
-          `${API_BASE}/initiate-audio-generation`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ title, text, voice, model, instructions })
-          }
-        );
-        if (!initRes.ok) throw new Error(`Initiation failed: ${initRes.statusText}`);
-        const { requestId } = await initRes.json();
-        if (!requestId) throw new Error('No requestId returned.');
+        const blob = await fetchChunkAudio({ text: state.chunks[chunkIndex].text, model, voice, instructions }, controller.signal);
+        await idbPut(key, blob, { jobKey: state.jobKey, index: chunkIndex, title: state.title });
+        state.chunks[chunkIndex].status = "ok";
+      } catch (e) {
+        state.chunks[chunkIndex].status = "fail";
+        state.chunks[chunkIndex].error = e.message || String(e);
+      }
 
-        const es = new EventSource(
-          `${API_BASE}/generate-audio-stream?requestId=${encodeURIComponent(requestId)}`
-        );
-        es.onmessage = (e) => {
-          const data = JSON.parse(e.data);
-          if (data.status) {
-            statusDiv.innerText = data.status;
-          } else if (data.error) {
-            statusDiv.innerText = `Error: ${data.error}`;
-            es.close();
-          } else if (data.audioBase64 && data.title) {
-            statusDiv.innerText = 'Process complete.';
-            const bin = atob(data.audioBase64);
-            const arr = new Uint8Array(bin.length);
-            for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
-            const url = URL.createObjectURL(new Blob([arr], { type: 'audio/mpeg' }));
-            const item = document.createElement('div');
-            item.className = 'audio-item';
-            item.innerHTML = `
-              <h3>${data.title}</h3>
-              <audio controls src="${url}"></audio><br/>
-              <a href="${url}" download="${data.title}.mp3">
-                Download ${data.title}.mp3
-              </a>`;
-            audioList.prepend(item);
-            es.close();
-          }
-        };
-        es.onerror = () => {
-          statusDiv.innerText = 'Error receiving updates.';
-          es.close();
-        };
-      } catch (err) {
-        statusDiv.innerText = `Generation Error: ${err.message}`;
+      state.running = false;
+      setButtons(false);
+
+      const failed = state.chunks.filter(c => c.status === "fail").length;
+      setStatus(failed ? `Still failing: ${failed} chunk(s).` : `All chunks complete.`);
+      renderChunkRows(state);
+    }
+
+    async function retryFailed(state) {
+      if (state.running) return;
+      controller = new AbortController();
+      state.running = true;
+      setButtons(true);
+
+      const concurrency = parseInt(concurrencySelect.value, 10) || 3;
+      const model = state.model, voice = state.voice, instructions = state.instructions;
+
+      const failedIdx = state.chunks.map((c, i) => c.status === "fail" ? i : -1).filter(i => i >= 0);
+      if (!failedIdx.length) {
+        state.running = false;
+        setButtons(false);
+        return;
+      }
+
+      setStatus(`Retrying ${failedIdx.length} failed chunk(s)…`);
+      renderChunkRows(state);
+
+      await runPool(failedIdx, async (i) => {
+        const key = `${state.jobKey}:${pad3(i)}`;
+        state.chunks[i].status = "run";
+        state.chunks[i].error = "";
+        renderChunkRows(state);
+
+        try {
+          const blob = await fetchChunkAudio({ text: state.chunks[i].text, model, voice, instructions }, controller.signal);
+          await idbPut(key, blob, { jobKey: state.jobKey, index: i, title: state.title });
+          state.chunks[i].status = "ok";
+        } catch (e) {
+          state.chunks[i].status = "fail";
+          state.chunks[i].error = e.message || String(e);
+        }
+        renderChunkRows(state);
+      }, concurrency, controller.signal);
+
+      state.running = false;
+      setButtons(false);
+
+      const still = state.chunks.filter(c => c.status === "fail").length;
+      setStatus(still ? `Retry finished. Still failing: ${still} chunk(s).` : `All chunks complete.`);
+      renderChunkRows(state);
+    }
+
+    // Buttons
+    generateBtn.addEventListener("click", async () => {
+      audioList.innerHTML = "";
+      chunkListEl.innerHTML = "";
+      setStatus("");
+
+      const title = (titleInput.value.trim() || "Untitled").replace(/[\\/:*?"<>|]/g, "_");
+      const text = textInput.value || "";
+      const model = modelSelect.value;
+      const voice = voiceSelect.value;
+      const instructions = customInstr.value.trim();
+      const chunkSize = Math.max(500, Math.min(6000, parseInt(chunkSizeInput.value, 10) || 2500));
+
+      if (!text.trim()) {
+        setStatus("Enter text first.");
+        return;
+      }
+
+      // Create stable jobKey so refresh/resume works
+      const jobKey = await sha256(JSON.stringify({ title, text, model, voice, instructions, chunkSize }));
+
+      const pieces = splitIntoChunks(text, chunkSize);
+
+      // Build state
+      STATE = {
+        title, text, model, voice, instructions,
+        chunkSize,
+        jobKey,
+        running: false,
+        chunks: pieces.map(p => ({ text: p, len: p.length, status: "new", error: "" })),
+      };
+
+      // Load any existing chunks from IndexedDB
+      for (let i = 0; i < STATE.chunks.length; i++) {
+        const key = `${STATE.jobKey}:${pad3(i)}`;
+        const rec = await idbGet(key);
+        if (rec?.blob) STATE.chunks[i].status = "ok";
+      }
+
+      controller = new AbortController();
+      await generateAll(STATE);
+    });
+
+    retryBtn.addEventListener("click", async () => {
+      if (!STATE) return;
+      controller = new AbortController();
+      await retryFailed(STATE);
+    });
+
+    cancelBtn.addEventListener("click", () => {
+      if (controller) controller.abort();
+      if (STATE) {
+        STATE.running = false;
+        setButtons(false);
+        setStatus("Cancelled.");
+        renderChunkRows(STATE);
       }
     });
+
+    downloadZipBtn.addEventListener("click", async () => {
+      if (!STATE) return;
+      const zip = new JSZip();
+      const prefix = `${STATE.jobKey}:`;
+
+      const all = await idbGetAllByPrefix(prefix);
+      const ok = all
+        .map(x => ({ ...x, idx: parseInt(x.key.split(":")[1], 10) }))
+        .filter(x => Number.isFinite(x.idx))
+        .sort((a,b) => a.idx - b.idx);
+
+      if (!ok.length) {
+        setStatus("No completed chunks to zip.");
+        return;
+      }
+
+      ok.forEach((rec) => {
+        const idx = rec.idx;
+        zip.file(`${STATE.title}_chunk_${pad3(idx)}.mp3`, rec.blob);
+      });
+
+      setStatus(`Building ZIP (${ok.length} file(s))…`);
+      const blob = await zip.generateAsync({ type: "blob" });
+
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${STATE.title}_chunks.zip`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      setStatus("ZIP downloaded.");
+    });
+
+    downloadFullBtn.addEventListener("click", async () => {
+      if (!STATE) return;
+      if (!STATE.chunks.every(c => c.status === "ok")) {
+        setStatus("All chunks must be complete before full concat.");
+        return;
+      }
+
+      const prefix = `${STATE.jobKey}:`;
+      const all = await idbGetAllByPrefix(prefix);
+      const ordered = all
+        .map(x => ({ ...x, idx: parseInt(x.key.split(":")[1], 10) }))
+        .filter(x => Number.isFinite(x.idx))
+        .sort((a,b) => a.idx - b.idx);
+
+      if (ordered.length !== STATE.chunks.length) {
+        setStatus("Missing some stored chunks. Re-generate or retry.");
+        return;
+      }
+
+      const fd = new FormData();
+      ordered.forEach((rec) => {
+        fd.append("files", rec.blob, `chunk_${pad3(rec.idx)}.mp3`);
+      });
+
+      setStatus("Uploading chunks for concat…");
+      downloadFullBtn.disabled = true;
+
+      try {
+        const res = await fetch(`${API_BASE}/concat-mp3`, {
+          method: "POST",
+          body: fd
+        });
+
+        if (!res.ok) {
+          const maybe = await res.json().catch(() => null);
+          throw new Error(maybe?.error || `${res.status} ${res.statusText}`);
+        }
+
+        const buf = await res.arrayBuffer();
+        const fullBlob = new Blob([buf], { type: "audio/mpeg" });
+        const url = URL.createObjectURL(fullBlob);
+
+        audioList.innerHTML = `
+          <div class="audio-item">
+            <h3>${STATE.title}</h3>
+            <audio controls src="${url}"></audio><br/>
+            <a href="${url}" download="${STATE.title}.mp3">Download ${STATE.title}.mp3</a>
+          </div>
+        `;
+
+        setStatus("Full MP3 ready.");
+      } catch (e) {
+        setStatus(`Concat error: ${e.message || String(e)}`);
+      } finally {
+        downloadFullBtn.disabled = false;
+      }
+    });
+
+    // Keep buttons in sync
+    const observer = new MutationObserver(() => {
+      if (!STATE) {
+        retryBtn.disabled = true;
+        cancelBtn.disabled = true;
+        downloadZipBtn.disabled = true;
+        downloadFullBtn.disabled = true;
+      } else {
+        setButtons(STATE.running);
+      }
+    });
+    observer.observe(statusDiv, { childList: true, subtree: true });
   </script>
 </body>
 </html>
