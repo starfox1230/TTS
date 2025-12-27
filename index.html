@@ -122,8 +122,10 @@
     <div class="row">
       <button id="generateBtn">Generate Audio</button>
       <button id="retryBtn" disabled>Retry failed</button>
-      <button id="cancelBtn" disabled>Cancel</button>
+      <button id="uploadZipBtn">Upload Zip File</button>
     </div>
+
+    <input type="file" id="uploadZipInput" accept=".zip" style="display:none">
 
     <div class="row">
       <button id="downloadZipBtn" disabled>Download completed chunks (ZIP)</button>
@@ -148,7 +150,8 @@
 
     const generateBtn = document.getElementById("generateBtn");
     const retryBtn = document.getElementById("retryBtn");
-    const cancelBtn = document.getElementById("cancelBtn");
+    const uploadZipBtn = document.getElementById("uploadZipBtn");
+    const uploadZipInput = document.getElementById("uploadZipInput");
 
     const downloadZipBtn = document.getElementById("downloadZipBtn");
     const downloadFullBtn = document.getElementById("downloadFullBtn");
@@ -470,7 +473,7 @@
 
     function setButtons(running) {
       generateBtn.disabled = running;
-      cancelBtn.disabled = !running;
+      uploadZipBtn.disabled = running;
       retryBtn.disabled = running || !STATE?.chunks?.some(c => c.status === "fail");
       downloadZipBtn.disabled = running || !STATE?.chunks?.some(c => c.status === "ok");
       downloadFullBtn.disabled = running || !STATE?.chunks?.every(c => c.status === "ok");
@@ -690,13 +693,62 @@
       await retryFailed(STATE);
     });
 
-    cancelBtn.addEventListener("click", () => {
-      if (controller) controller.abort();
-      if (STATE) {
-        STATE.running = false;
-        setButtons(false);
-        setStatus("Cancelled.");
-        renderChunkRows(STATE);
+    uploadZipBtn.addEventListener("click", () => uploadZipInput.click());
+
+    uploadZipInput.addEventListener("change", async () => {
+      const file = uploadZipInput.files?.[0];
+      if (!file) return;
+
+      try {
+        uploadZipBtn.disabled = true;
+        setStatus(`Reading ZIP: ${file.name}`);
+
+        const buf = await file.arrayBuffer();
+        const zip = await JSZip.loadAsync(buf);
+        const entries = Object.values(zip.files)
+          .filter(f => !f.dir && f.name.toLowerCase().endsWith(".mp3"))
+          .sort((a, b) => a.name.localeCompare(b.name));
+
+        if (!entries.length) {
+          setStatus("No .mp3 files found inside the ZIP.");
+          return;
+        }
+
+        const fd = new FormData();
+        for (const entry of entries) {
+          const blob = await entry.async("blob");
+          const base = entry.name.split("/").pop() || entry.name;
+          fd.append("files", blob, base);
+        }
+
+        const titleFromFile = file.name.replace(/\.zip$/i, "") || "Uploaded ZIP";
+        setStatus(`Uploading ${entries.length} chunk(s) for concat…`);
+
+        const res = await fetch(`${API_BASE}/concat-mp3`, { method: "POST", body: fd });
+
+        if (!res.ok) {
+          const maybe = await res.json().catch(() => null);
+          throw new Error(maybe?.error || `${res.status} ${res.statusText}`);
+        }
+
+        const outBuf = await res.arrayBuffer();
+        const finalBlob = new Blob([outBuf], { type: "audio/mpeg" });
+        const url = URL.createObjectURL(finalBlob);
+
+        audioList.innerHTML = `
+          <div class="audio-item">
+            <h3>${titleFromFile}</h3>
+            <audio controls src="${url}"></audio><br/>
+            <a href="${url}" download="${titleFromFile}.mp3">Download ${titleFromFile}.mp3</a>
+          </div>
+        `;
+
+        setStatus("Concatenated audio ready.");
+      } catch (e) {
+        setStatus(`ZIP concat error: ${e.message || String(e)}`);
+      } finally {
+        uploadZipBtn.disabled = false;
+        uploadZipInput.value = "";
       }
     });
 
@@ -795,7 +847,7 @@
     const observer = new MutationObserver(() => {
       if (!STATE) {
         retryBtn.disabled = true;
-        cancelBtn.disabled = true;
+        uploadZipBtn.disabled = false;
         downloadZipBtn.disabled = true;
         downloadFullBtn.disabled = true;
       } else {
