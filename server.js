@@ -66,6 +66,35 @@ app.post("/tts-chunk", async (req, res) => {
   }
 });
 
+const { promises: fsp } = fs;
+
+const createProgressTracker = (jobId) => {
+  const startedAt = Date.now();
+  const steps = [];
+  const mark = (stage, extra = {}) => {
+    steps.push({ stage, atMs: Date.now() - startedAt, ...extra });
+  };
+
+  const summary = (extra = {}) => ({
+    jobId,
+    totalMs: Date.now() - startedAt,
+    steps,
+    ...extra,
+  });
+
+  return { mark, summary };
+};
+
+const safeHeaderJson = (obj) => {
+  try {
+    const str = JSON.stringify(obj);
+    // Headers can be truncated by proxies; cap at ~8kb to stay safe.
+    return str.length > 8192 ? `${str.slice(0, 8000)}...` : str;
+  } catch {
+    return "{}";
+  }
+};
+
 /**
  * POST /concat-mp3
  * multipart/form-data with files[] (each is an mp3 chunk)
@@ -83,25 +112,35 @@ app.post("/concat-mp3", upload.array("files", 500), async (req, res) => {
   }
 
   const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  const jobDir = fs.mkdtempSync(path.join(tmpdir(), `tts-concat-${requestId}-`));
+  const tracker = createProgressTracker(requestId);
+  tracker.mark("received_files", { count: files.length });
+
+  const jobDir = await fsp.mkdtemp(path.join(tmpdir(), `tts-concat-${requestId}-`));
 
   try {
     // Write uploaded chunks to disk with stable ordering
     // Client should name them like chunk_000.mp3, chunk_001.mp3, ...
-    const written = [];
-    for (const f of files) {
-      const safeName = (f.originalname || "chunk.mp3").replace(/[^a-zA-Z0-9._-]/g, "_");
-      const outPath = path.join(jobDir, safeName);
-      fs.writeFileSync(outPath, f.buffer);
-      written.push(outPath);
-    }
+    const written = await Promise.all(
+      files.map(async (f) => {
+        const safeName = (f.originalname || "chunk.mp3").replace(/[^a-zA-Z0-9._-]/g, "_");
+        const outPath = path.join(jobDir, safeName);
+        await fsp.writeFile(outPath, f.buffer);
+        return outPath;
+      })
+    );
+
+    tracker.mark("chunks_persisted", { count: written.length });
 
     written.sort((a, b) => path.basename(a).localeCompare(path.basename(b)));
+    tracker.mark("chunks_sorted");
 
     const listFile = path.join(jobDir, "filelist.txt");
-    fs.writeFileSync(listFile, written.map((p) => `file '${p}'`).join("\n"));
+    await fsp.writeFile(listFile, written.map((p) => `file '${p}'`).join("\n"));
+    tracker.mark("filelist_written", { listFile });
 
     const outPath = path.join(jobDir, "full.mp3");
+    const ffmpegLog = [];
+    const ffmpegStart = Date.now();
 
     await new Promise((resolve, reject) => {
       const ff = spawn("ffmpeg", [
@@ -119,22 +158,44 @@ app.post("/concat-mp3", upload.array("files", 500), async (req, res) => {
         outPath,
       ]);
 
+      ff.stderr.on("data", (d) => ffmpegLog.push(d.toString()));
       ff.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`ffmpeg exited ${code}`))));
       ff.on("error", reject);
     });
 
-    const final = fs.readFileSync(outPath);
+    const ffmpegMs = Date.now() - ffmpegStart;
+    tracker.mark("ffmpeg_finished", { durationMs: ffmpegMs });
+
+    const final = await fsp.readFile(outPath);
+    tracker.mark("output_read", { bytes: final.length });
+
+    const meta = tracker.summary({
+      chunkCount: files.length,
+      ffmpegMs,
+      outputBytes: final.length,
+    });
+
+    res.setHeader("X-Concatenation-Job", requestId);
+    res.setHeader("X-Concatenation-Meta", safeHeaderJson(meta));
+    if (ffmpegLog.length) {
+      res.setHeader("X-Concatenation-Log", safeHeaderJson({ stderr: ffmpegLog }));
+    }
 
     res.setHeader("Content-Type", "audio/mpeg");
     res.setHeader("Content-Disposition", `attachment; filename="full_${requestId}.mp3"`);
     res.setHeader("Cache-Control", "no-store");
     res.status(200).send(final);
   } catch (err) {
+    tracker.mark("failed", { message: err?.message });
     console.error("Concat error:", err);
-    res.status(500).json({ error: "Failed to concatenate mp3 chunks" });
+    res
+      .status(500)
+      .setHeader("X-Concatenation-Job", requestId)
+      .setHeader("X-Concatenation-Meta", safeHeaderJson(tracker.summary()))
+      .json({ error: "Failed to concatenate mp3 chunks", message: err?.message });
   } finally {
     try {
-      fs.rmSync(jobDir, { recursive: true, force: true });
+      await fsp.rm(jobDir, { recursive: true, force: true });
     } catch {}
   }
 });
