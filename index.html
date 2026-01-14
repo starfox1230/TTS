@@ -180,6 +180,25 @@
       "gpt-4o-mini-tts": ["alloy","ash","ballad","coral","echo","fable","onyx","nova","sage","shimmer","verse","marin","cedar"]
     };
 
+    function decodeHtmlEntities(value) {
+      const parser = document.createElement("textarea");
+      parser.innerHTML = value;
+      return parser.value;
+    }
+
+    function normalizePastedText(rawText) {
+      let text = rawText;
+      if (/%[0-9A-Fa-f]{2}/.test(text)) {
+        try {
+          text = decodeURIComponent(text);
+        } catch (error) {
+          text = rawText;
+        }
+      }
+      text = decodeHtmlEntities(text);
+      return text.replace(/\u00A0/g, " ");
+    }
+
     // IndexedDB (simple wrapper)
     const DB_NAME = "tts_chunks_db";
     const DB_STORE = "chunks";
@@ -465,6 +484,23 @@
       const totalCost = textCost + audioCost;
       charCountDiv.innerText =
         `Chars: ${len} | Text: $${textCost.toFixed(3)} + Audio: $${audioCost.toFixed(3)} = $${totalCost.toFixed(3)}`;
+    });
+
+    textInput.addEventListener("paste", (event) => {
+      const clipboard = event.clipboardData || window.clipboardData;
+      if (!clipboard) {
+        return;
+      }
+      const rawText = clipboard.getData("text/plain");
+      if (!rawText) {
+        return;
+      }
+      event.preventDefault();
+      const sanitizedText = normalizePastedText(rawText);
+      const start = textInput.selectionStart ?? textInput.value.length;
+      const end = textInput.selectionEnd ?? textInput.value.length;
+      textInput.setRangeText(sanitizedText, start, end, "end");
+      textInput.dispatchEvent(new Event("input"));
     });
 
     // Main state
