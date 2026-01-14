@@ -527,9 +527,52 @@
       return helper.value;
     }
 
-    function normalizePastedText(text) {
+    function htmlToPlainText(html) {
+      const wrapper = document.createElement("div");
+      wrapper.innerHTML = html;
+
+      const blockTags = new Set(["P","DIV","LI","UL","OL","H1","H2","H3","H4","H5","H6","BLOCKQUOTE","PRE"]);
+      const parts = [];
+
+      function walk(node) {
+        if (node.nodeType === Node.TEXT_NODE) {
+          parts.push(node.textContent);
+          return;
+        }
+
+        if (node.nodeType !== Node.ELEMENT_NODE) return;
+
+        const tag = node.tagName;
+        if (tag === "BR") {
+          parts.push("\n");
+          return;
+        }
+
+        node.childNodes.forEach(walk);
+
+        if (blockTags.has(tag)) {
+          parts.push("\n");
+        }
+      }
+
+      wrapper.childNodes.forEach(walk);
+      return parts.join("").replace(/\n{3,}/g, "\n\n").trim();
+    }
+
+    function normalizePastedText(text, html) {
       const issues = [];
       let normalized = text;
+
+      if (html) {
+        const hasTags = /<\/?[a-z][\s\S]*>/i.test(html);
+        if (hasTags) {
+          const fromHtml = htmlToPlainText(html);
+          if (fromHtml && fromHtml !== normalized) {
+            issues.push("Rich text (HTML)");
+            normalized = fromHtml;
+          }
+        }
+      }
 
       const urlDecoded = decodeUrlEncoded(normalized);
       if (urlDecoded !== normalized) {
@@ -581,9 +624,11 @@
 
     textInput.addEventListener("paste", (event) => {
       const clipboardText = event.clipboardData?.getData("text/plain");
-      if (!clipboardText) return;
+      const clipboardHtml = event.clipboardData?.getData("text/html");
+      if (!clipboardText && !clipboardHtml) return;
 
-      const { normalized, issues, changed } = normalizePastedText(clipboardText);
+      const rawText = clipboardText || clipboardHtml;
+      const { normalized, issues, changed } = normalizePastedText(rawText, clipboardHtml);
       if (!changed) return;
 
       event.preventDefault();
@@ -592,7 +637,7 @@
       textInput.setRangeText(normalized, start, end, "end");
       textInput.dispatchEvent(new Event("input"));
 
-      lastPasteInfo = { raw: clipboardText, normalized, issues, start, end: start + normalized.length };
+      lastPasteInfo = { raw: rawText, normalized, issues, start, end: start + normalized.length };
       openPasteOverlay(lastPasteInfo);
     });
 
