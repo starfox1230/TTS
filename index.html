@@ -467,6 +467,32 @@
         `Chars: ${len} | Text: $${textCost.toFixed(3)} + Audio: $${audioCost.toFixed(3)} = $${totalCost.toFixed(3)}`;
     });
 
+    function decodeMaybeUrlEncoded(text) {
+      const hasEncodedChunks = /%[0-9a-fA-F]{2}/.test(text);
+      const hasCommonEscapes = /%0A|%0D|%20|\+/.test(text);
+      if (!hasEncodedChunks || !hasCommonEscapes) return text;
+
+      try {
+        const normalized = text.replace(/\+/g, " ");
+        const decoded = decodeURIComponent(normalized);
+        return decoded || text;
+      } catch {
+        return text;
+      }
+    }
+
+    textInput.addEventListener("paste", (event) => {
+      const clipboardText = event.clipboardData?.getData("text/plain");
+      if (!clipboardText) return;
+
+      const decoded = decodeMaybeUrlEncoded(clipboardText);
+      if (decoded === clipboardText) return;
+
+      event.preventDefault();
+      textInput.setRangeText(decoded, textInput.selectionStart, textInput.selectionEnd, "end");
+      textInput.dispatchEvent(new Event("input"));
+    });
+
     // Main state
     let STATE = null;
     let controller = null;
