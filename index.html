@@ -30,18 +30,6 @@
     .pill.ok { background:#1b5e20; }
     .pill.bad { background:#b71c1c; }
     .pill.run { background:#0d47a1; }
-    .overlay { position: fixed; inset: 0; background: rgba(10, 10, 10, 0.8); display: flex; align-items: center; justify-content: center; z-index: 999; }
-    .overlay.hidden { display: none; }
-    .overlay-card { background: #1b1b1b; border: 1px solid #333; border-radius: 10px; max-width: 760px; width: 90%; padding: 20px; box-shadow: 0 12px 40px rgba(0,0,0,0.4); }
-    .overlay-card h3 { margin-top: 0; }
-    .overlay-meta { color: #bbb; font-size: 0.95em; margin-bottom: 12px; }
-    .overlay-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
-    .overlay-panel { background: #121212; border: 1px solid #2a2a2a; border-radius: 8px; padding: 10px; }
-    .overlay-panel h4 { margin: 0 0 6px 0; font-size: 0.9em; color: #90caf9; }
-    .overlay-panel pre { margin: 0; white-space: pre-wrap; word-break: break-word; color: #e0e0e0; font-family: "Segoe UI", sans-serif; }
-    .overlay-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px; }
-    .overlay-actions button { width: auto; padding: 8px 14px; }
-    .overlay-actions .secondary { background: #424242; }
   </style>
 
   <!-- JSZip for “Download ZIP” -->
@@ -150,27 +138,6 @@
     <div class="chunkList" id="chunkList"></div>
   </div>
 
-  <div id="pasteOverlay" class="overlay hidden" role="dialog" aria-modal="true" aria-hidden="true">
-    <div class="overlay-card">
-      <h3>Encoding detected on paste</h3>
-      <p class="overlay-meta">We cleaned the pasted text so spacing and symbols display normally. <strong>Detected:</strong> <span id="pasteIssueList"></span></p>
-      <div class="overlay-grid">
-        <div class="overlay-panel">
-          <h4>Original</h4>
-          <pre id="pasteOriginal"></pre>
-        </div>
-        <div class="overlay-panel">
-          <h4>Cleaned</h4>
-          <pre id="pasteCleaned"></pre>
-        </div>
-      </div>
-      <div class="overlay-actions">
-        <button class="secondary" id="restoreOriginalBtn">Restore original</button>
-        <button id="keepCleanedBtn">Keep cleaned</button>
-      </div>
-    </div>
-  </div>
-
   <script>
     const API_BASE = "https://tts-jeh9.onrender.com";
 
@@ -192,12 +159,6 @@
     const statusDiv = document.getElementById("statusMessages");
     const audioList = document.getElementById("audioList");
     const chunkListEl = document.getElementById("chunkList");
-    const pasteOverlay = document.getElementById("pasteOverlay");
-    const pasteIssueList = document.getElementById("pasteIssueList");
-    const pasteOriginal = document.getElementById("pasteOriginal");
-    const pasteCleaned = document.getElementById("pasteCleaned");
-    const restoreOriginalBtn = document.getElementById("restoreOriginalBtn");
-    const keepCleanedBtn = document.getElementById("keepCleanedBtn");
 
     const showAdvanced = document.getElementById("showAdvanced");
     const advancedOptions = document.getElementById("advancedOptions");
@@ -504,141 +465,6 @@
       const totalCost = textCost + audioCost;
       charCountDiv.innerText =
         `Chars: ${len} | Text: $${textCost.toFixed(3)} + Audio: $${audioCost.toFixed(3)} = $${totalCost.toFixed(3)}`;
-    });
-
-    function decodeUrlEncoded(text) {
-      const hasEncodedChunks = /%[0-9a-fA-F]{2}/.test(text);
-      const hasCommonEscapes = /%0A|%0D|%20|\+/.test(text);
-      if (!hasEncodedChunks || !hasCommonEscapes) return text;
-
-      try {
-        const normalized = text.replace(/\+/g, " ");
-        const decoded = decodeURIComponent(normalized);
-        return decoded || text;
-      } catch {
-        return text;
-      }
-    }
-
-    function decodeHtmlEntities(text) {
-      if (!/&[a-zA-Z0-9#]+;/.test(text)) return text;
-      const helper = document.createElement("textarea");
-      helper.innerHTML = text;
-      return helper.value;
-    }
-
-    function htmlToPlainText(html) {
-      const wrapper = document.createElement("div");
-      wrapper.innerHTML = html;
-
-      const blockTags = new Set(["P","DIV","LI","UL","OL","H1","H2","H3","H4","H5","H6","BLOCKQUOTE","PRE"]);
-      const parts = [];
-
-      function walk(node) {
-        if (node.nodeType === Node.TEXT_NODE) {
-          parts.push(node.textContent);
-          return;
-        }
-
-        if (node.nodeType !== Node.ELEMENT_NODE) return;
-
-        const tag = node.tagName;
-        if (tag === "BR") {
-          parts.push("\n");
-          return;
-        }
-
-        node.childNodes.forEach(walk);
-
-        if (blockTags.has(tag)) {
-          parts.push("\n");
-        }
-      }
-
-      wrapper.childNodes.forEach(walk);
-      return parts.join("").replace(/\n{3,}/g, "\n\n").trim();
-    }
-
-    function normalizePastedText(text, html) {
-      const issues = [];
-      let normalized = text;
-
-      if (html) {
-        const hasTags = /<\/?[a-z][\s\S]*>/i.test(html);
-        if (hasTags) {
-          const fromHtml = htmlToPlainText(html);
-          if (fromHtml && fromHtml !== normalized) {
-            issues.push("Rich text (HTML)");
-            normalized = fromHtml;
-          }
-        }
-      }
-
-      const urlDecoded = decodeUrlEncoded(normalized);
-      if (urlDecoded !== normalized) {
-        issues.push("URL-encoded characters");
-        normalized = urlDecoded;
-      }
-
-      const htmlDecoded = decodeHtmlEntities(normalized);
-      if (htmlDecoded !== normalized) {
-        issues.push("HTML entities");
-        normalized = htmlDecoded;
-      }
-
-      return { normalized, issues, changed: normalized !== text };
-    }
-
-    let lastPasteInfo = null;
-
-    function openPasteOverlay(info) {
-      pasteIssueList.textContent = info.issues.length ? info.issues.join(", ") : "Encoding detected";
-      pasteOriginal.textContent = info.raw;
-      pasteCleaned.textContent = info.normalized;
-      pasteOverlay.classList.remove("hidden");
-      pasteOverlay.setAttribute("aria-hidden", "false");
-    }
-
-    function closePasteOverlay() {
-      pasteOverlay.classList.add("hidden");
-      pasteOverlay.setAttribute("aria-hidden", "true");
-      lastPasteInfo = null;
-    }
-
-    restoreOriginalBtn.addEventListener("click", () => {
-      if (!lastPasteInfo) return;
-      const { start, end, raw, normalized } = lastPasteInfo;
-      const currentSlice = textInput.value.slice(start, end);
-      const replaceStart = currentSlice === normalized ? start : textInput.selectionStart;
-      const replaceEnd = currentSlice === normalized ? end : textInput.selectionEnd;
-      textInput.setRangeText(raw, replaceStart, replaceEnd, "end");
-      textInput.dispatchEvent(new Event("input"));
-      closePasteOverlay();
-    });
-
-    keepCleanedBtn.addEventListener("click", () => closePasteOverlay());
-
-    pasteOverlay.addEventListener("click", (event) => {
-      if (event.target === pasteOverlay) closePasteOverlay();
-    });
-
-    textInput.addEventListener("paste", (event) => {
-      const clipboardText = event.clipboardData?.getData("text/plain");
-      const clipboardHtml = event.clipboardData?.getData("text/html");
-      if (!clipboardText && !clipboardHtml) return;
-
-      const rawText = clipboardText || clipboardHtml;
-      const { normalized, issues, changed } = normalizePastedText(rawText, clipboardHtml);
-      if (!changed) return;
-
-      event.preventDefault();
-      const start = textInput.selectionStart;
-      const end = textInput.selectionEnd;
-      textInput.setRangeText(normalized, start, end, "end");
-      textInput.dispatchEvent(new Event("input"));
-
-      lastPasteInfo = { raw: rawText, normalized, issues, start, end: start + normalized.length };
-      openPasteOverlay(lastPasteInfo);
     });
 
     // Main state
