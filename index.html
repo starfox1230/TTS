@@ -577,6 +577,12 @@
       }
     }
 
+    function resetFullMp3State(state) {
+      if (!state) return;
+      state.fullMp3Ready = false;
+      audioList.innerHTML = "";
+    }
+
     async function attemptAutoConcat(state) {
       if (!state) return;
       if (state.running || state.concatRunning || state.fullMp3Ready) return;
@@ -670,6 +676,7 @@
     async function retrySpecificChunk(state, chunkIndex) {
       if (state.running) return;
       controller = new AbortController();
+      resetFullMp3State(state);
       state.running = true;
       setButtons(true);
 
@@ -706,6 +713,7 @@
     async function retryFailed(state) {
       if (state.running) return;
       controller = new AbortController();
+      resetFullMp3State(state);
       state.running = true;
       setButtons(true);
 
