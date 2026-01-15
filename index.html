@@ -508,11 +508,80 @@
     let controller = null;
 
     function setButtons(running) {
-      generateBtn.disabled = running;
-      uploadZipBtn.disabled = running;
-      retryBtn.disabled = running || !STATE?.chunks?.some(c => c.status === "fail");
-      downloadZipBtn.disabled = running || !STATE?.chunks?.some(c => c.status === "ok");
-      downloadFullBtn.disabled = running || !STATE?.chunks?.every(c => c.status === "ok");
+      const busy = running || STATE?.concatRunning;
+      generateBtn.disabled = busy;
+      uploadZipBtn.disabled = busy;
+      retryBtn.disabled = busy || !STATE?.chunks?.some(c => c.status === "fail");
+      downloadZipBtn.disabled = busy || !STATE?.chunks?.some(c => c.status === "ok");
+      downloadFullBtn.disabled = busy || !STATE?.chunks?.every(c => c.status === "ok");
+    }
+
+    async function concatFullMp3(state, { auto = false } = {}) {
+      if (!state) return;
+      if (!state.chunks.every(c => c.status === "ok")) {
+        setStatus("All chunks must be complete before full concat.");
+        return;
+      }
+
+      const prefix = `${state.jobKey}:`;
+      const all = await idbGetAllByPrefix(prefix);
+      const ordered = all
+        .map(x => ({ ...x, idx: parseInt(x.key.split(":")[1], 10) }))
+        .filter(x => Number.isFinite(x.idx))
+        .sort((a,b) => a.idx - b.idx);
+
+      if (ordered.length !== state.chunks.length) {
+        setStatus("Missing some stored chunks. Re-generate or retry.");
+        return;
+      }
+
+      const fd = new FormData();
+      ordered.forEach((rec) => {
+        fd.append("files", rec.blob, `chunk_${pad3(rec.idx)}.mp3`);
+      });
+
+      state.concatRunning = true;
+      setButtons(state.running);
+      setStatus(auto ? "All chunks complete. Concatenating full MP3…" : "Uploading chunks for concat…");
+
+      try {
+        const res = await fetch(`${API_BASE}/concat-mp3`, {
+          method: "POST",
+          body: fd
+        });
+
+        if (!res.ok) {
+          const maybe = await res.json().catch(() => null);
+          throw new Error(maybe?.error || `${res.status} ${res.statusText}`);
+        }
+
+        const buf = await res.arrayBuffer();
+        const fullBlob = new Blob([buf], { type: "audio/mpeg" });
+        const url = URL.createObjectURL(fullBlob);
+
+        audioList.innerHTML = `
+          <div class="audio-item">
+            <h3>${state.title}</h3>
+            <audio controls src="${url}"></audio><br/>
+            <a href="${url}" download="${state.title}.mp3">Download ${state.title}.mp3</a>
+          </div>
+        `;
+
+        state.fullMp3Ready = true;
+        setStatus("Full MP3 ready.");
+      } catch (e) {
+        setStatus(`Concat error: ${e.message || String(e)}`);
+      } finally {
+        state.concatRunning = false;
+        setButtons(state.running);
+      }
+    }
+
+    async function attemptAutoConcat(state) {
+      if (!state) return;
+      if (state.running || state.concatRunning || state.fullMp3Ready) return;
+      if (!state.chunks.every(c => c.status === "ok")) return;
+      await concatFullMp3(state, { auto: true });
     }
 
     async function fetchChunkAudio({ text, model, voice, instructions }, signal) {
@@ -592,7 +661,8 @@
       if (failed) {
         setStatus(`Done with errors. ${failed} chunk(s) failed. Use “Retry failed” or retry individual chunks.`);
       } else {
-        setStatus(`All chunks complete. You can download ZIP or full MP3.`);
+        setStatus(`All chunks complete. Preparing full MP3…`);
+        await attemptAutoConcat(state);
       }
       renderChunkRows(state);
     }
@@ -624,7 +694,12 @@
       setButtons(false);
 
       const failed = state.chunks.filter(c => c.status === "fail").length;
-      setStatus(failed ? `Still failing: ${failed} chunk(s).` : `All chunks complete.`);
+      if (failed) {
+        setStatus(`Still failing: ${failed} chunk(s).`);
+      } else {
+        setStatus("All chunks complete. Preparing full MP3…");
+        await attemptAutoConcat(state);
+      }
       renderChunkRows(state);
     }
 
@@ -674,7 +749,12 @@
       setButtons(false);
 
       const still = state.chunks.filter(c => c.status === "fail").length;
-      setStatus(still ? `Retry finished. Still failing: ${still} chunk(s).` : `All chunks complete.`);
+      if (still) {
+        setStatus(`Retry finished. Still failing: ${still} chunk(s).`);
+      } else {
+        setStatus("All chunks complete. Preparing full MP3…");
+        await attemptAutoConcat(state);
+      }
       renderChunkRows(state);
     }
 
@@ -709,6 +789,8 @@
         chunkSize,
         jobKey,
         running: false,
+        concatRunning: false,
+        fullMp3Ready: false,
         chunks: pieces.map(p => ({ text: p, len: p.length, status: "new", error: "" })),
       };
 
@@ -823,60 +905,7 @@
 
     downloadFullBtn.addEventListener("click", async () => {
       if (!STATE) return;
-      if (!STATE.chunks.every(c => c.status === "ok")) {
-        setStatus("All chunks must be complete before full concat.");
-        return;
-      }
-
-      const prefix = `${STATE.jobKey}:`;
-      const all = await idbGetAllByPrefix(prefix);
-      const ordered = all
-        .map(x => ({ ...x, idx: parseInt(x.key.split(":")[1], 10) }))
-        .filter(x => Number.isFinite(x.idx))
-        .sort((a,b) => a.idx - b.idx);
-
-      if (ordered.length !== STATE.chunks.length) {
-        setStatus("Missing some stored chunks. Re-generate or retry.");
-        return;
-      }
-
-      const fd = new FormData();
-      ordered.forEach((rec) => {
-        fd.append("files", rec.blob, `chunk_${pad3(rec.idx)}.mp3`);
-      });
-
-      setStatus("Uploading chunks for concat…");
-      downloadFullBtn.disabled = true;
-
-      try {
-        const res = await fetch(`${API_BASE}/concat-mp3`, {
-          method: "POST",
-          body: fd
-        });
-
-        if (!res.ok) {
-          const maybe = await res.json().catch(() => null);
-          throw new Error(maybe?.error || `${res.status} ${res.statusText}`);
-        }
-
-        const buf = await res.arrayBuffer();
-        const fullBlob = new Blob([buf], { type: "audio/mpeg" });
-        const url = URL.createObjectURL(fullBlob);
-
-        audioList.innerHTML = `
-          <div class="audio-item">
-            <h3>${STATE.title}</h3>
-            <audio controls src="${url}"></audio><br/>
-            <a href="${url}" download="${STATE.title}.mp3">Download ${STATE.title}.mp3</a>
-          </div>
-        `;
-
-        setStatus("Full MP3 ready.");
-      } catch (e) {
-        setStatus(`Concat error: ${e.message || String(e)}`);
-      } finally {
-        downloadFullBtn.disabled = false;
-      }
+      await concatFullMp3(STATE, { auto: false });
     });
 
     // Keep buttons in sync
